@@ -20,7 +20,7 @@ import Logging
 extension Logger {
     static var kafkaTest: Logger {
         var logger = Logger(label: "kafka.test")
-        logger.logLevel = .debug
+        logger.logLevel = .debug // TODO: revert
         return logger
     }
 }

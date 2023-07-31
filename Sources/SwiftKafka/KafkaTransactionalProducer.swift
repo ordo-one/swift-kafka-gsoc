@@ -14,7 +14,7 @@ public final class KafkaTransactionalProducer: Service, Sendable {
     ///
     /// This creates a producer without listening for events.
     ///
-    /// - Parameter config: The ``KafkaProducerConfiguration`` for configuring the ``KafkaProducer``.
+    /// - Parameter config: The ``KafkaTransactionalProducerConfiguration`` for configuring the ``KafkaProducer``.
     /// - Parameter topicConfig: The ``KafkaTopicConfiguration`` used for newly created topics.
     /// - Parameter logger: A logger.
     /// - Returns: The newly created ``KafkaProducer``.
@@ -57,15 +57,18 @@ public final class KafkaTransactionalProducer: Service, Sendable {
         return (transactionalProducer, events)
     }
 
-    //
-    public func withTransaction(_ body: @Sendable (KafkaTransaction) async throws -> Void) async throws {
+    /// Begins Kafka transaction, provides it to given closure
+    /// Commits transaction unless closure throws
+    /// - Parameters:
+    ///   - function: revieve KafkaTransaction and use fills it with produced messages and offsets
+    public func withTransaction(_ function: @Sendable (KafkaTransaction) async throws -> Void) async throws {
         let transaction = try KafkaTransaction(
             client: try producer.client(),
             producer: self.producer
         )
 
         do { // need to think here a little bit how to abort transaction
-            try await body(transaction)
+            try await function(transaction)
             try await transaction.commit()
         } catch { // FIXME: maybe catch AbortTransaction?
             do {
