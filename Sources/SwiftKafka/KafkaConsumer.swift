@@ -32,7 +32,11 @@ extension KafkaConsumerCloseOnTerminate: NIOAsyncSequenceProducerDelegate {
     }
 
     func didTerminate() {
-        self.stateMachine.withLockedValue { $0.messageSequenceTerminated(isMessageSequence: isMessageSequence) }
+        let eventSource = self.stateMachine.withLockedValue { $0.messageSequenceTerminated(isMessageSequence: isMessageSequence) }
+        guard let eventSource else {
+            return
+        }
+        eventSource.finish()
     }
 }
 
@@ -246,7 +250,7 @@ public final class KafkaConsumer: Sendable, Service {
     ) throws -> (KafkaConsumer, KafkaConsumerEvents) {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
-        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch]
+        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch, .rebalance /* TODO: add rebalance to config */]
         // Only listen to offset commit events when autoCommit is false
         if config.enableAutoCommit == false {
             subscribedEvents.append(.offsetCommit)
@@ -321,6 +325,39 @@ public final class KafkaConsumer: Sendable, Service {
             try client.assign(topicPartitionList: assignment)
         }
     }
+    
+    // FIXME: it can be internal, instead of that make some
+    // FIXME: `Rebalance` struct that would call client assign()/assignIncremental()/unassignIncremental()
+    public func assign(_ list: KafkaTopicList) throws {
+        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        switch action {
+        case .allowed(let client):
+            try client.assign(topicPartitionList: list.list)
+        case .denied(let err):
+            throw KafkaError.client(reason: err)
+        }
+    }
+    
+    public func incrementalAssign(_ list: KafkaTopicList) throws {
+        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        switch action {
+        case .allowed(let client):
+            try client.incrementalAssign(topicPartitionList: list.list)
+        case .denied(let err):
+            throw KafkaError.client(reason: err)
+        }
+    }
+    
+    public func incrementalUnassign(_ list: KafkaTopicList) throws {
+        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        switch action {
+        case .allowed(let client):
+            try client.incrementalUnassign(topicPartitionList: list.list)
+        case .denied(let err):
+            throw KafkaError.client(reason: err)
+        }
+    }
+    
 
     /// Start polling Kafka for messages.
     ///
@@ -351,9 +388,8 @@ public final class KafkaConsumer: Sendable, Service {
                             eventSource?.finish()
                             throw error
                         }
-                    case .statistics(let statistics):
-                        _ = eventSource?.yield(.statistics(statistics))
                     default:
+                        _ = eventSource?.yield(KafkaConsumerEvent(event))
                         break // Ignore
                     }
                 }
@@ -362,7 +398,37 @@ public final class KafkaConsumer: Sendable, Service {
                 // Ignore poll result.
                 // We are just polling to serve any remaining events queued inside of `librdkafka`.
                 // All remaining queued consumer messages will get dropped and not be committed (marked as read).
-                _ = client.eventPoll()
+                let events = client.eventPoll()
+                for event in events {
+                    do { // FIXME: move to separate method?
+                        if case .rebalance(let rdAction) = event {
+                            let action = RebalanceAction.convert(from: rdAction)
+                            logger.info("Event sequence terminated, perform default rebalance for \(action)")
+                            switch action {
+                            case .assign(let proto, let topics):
+                                logger.info("Assign, proto [\(proto)], topics: \(topics)")
+                                if case .cooperative = proto {
+                                    try self.incrementalAssign(topics)
+                                }
+                                else {
+                                    try self.assign(topics)
+                                }
+                            case .revoke(let proto, let topics):
+                                logger.info("Revoke, proto [\(proto)], topics: \(topics)")
+                                if case .cooperative = proto {
+                                    try self.incrementalUnassign(topics)
+                                } else {
+                                    try self.assign(topics)
+                                }
+                            case .error(let proto, let topics, let err):
+                                logger.info("Error, proto [\(proto)], topics: \(topics), err: \(err)")
+                            }
+                        }
+                    } catch {
+                        // FIXIME: fatalError?
+                        logger.error("Could not perform default rebalance with error \(error)")
+                    }
+                }
                 try await Task.sleep(for: self.config.pollInterval)
             case .terminatePollLoop:
                 return
@@ -572,7 +638,7 @@ extension KafkaConsumer {
 
         /// The messages asynchronous sequence was terminated.
         /// All incoming messages will be dropped.
-        mutating func messageSequenceTerminated(isMessageSequence: Bool) {
+        mutating func messageSequenceTerminated(isMessageSequence: Bool) -> ProducerEvents.Source? {
             switch self.state {
             case .uninitialized:
                 fatalError("\(#function) invoked while still in state \(self.state)")
@@ -588,7 +654,8 @@ extension KafkaConsumer {
                     self.state = .consumptionStopped(client: client)
                     // If message sequence is being terminated, it means class deinit is called
                     // see `messages` field, it is last change to call finish for `eventSource`
-                    eventSource?.finish()
+                    // but we can't do it under mutex -> let's return
+                    return eventSource
                 }
                 else {
                     // Messages are still consuming, only event source was finished
@@ -599,6 +666,7 @@ extension KafkaConsumer {
             case .finishing, .finished:
                 break
             }
+            return nil
         }
 
         /// Action to take when wanting to store a message offset (to be auto-committed by `librdkafka`).
@@ -652,6 +720,33 @@ extension KafkaConsumer {
                 return .commitSync(client: client)
             case .finishing, .finished:
                 return .throwClosedError
+            }
+        }
+        
+        enum RebalanceAction {
+            /// Rebalance is still possible
+            ///
+            /// - Parameter client: Client used for handling the connection to the Kafka cluster.
+            case allowed(
+                client: RDKafkaClient
+            )
+            /// Throw an error. The ``KafkaConsumer`` is closed.
+            case denied(error: String)
+        }
+
+        
+        func rebalance() -> RebalanceAction {
+            switch self.state {
+            case .uninitialized:
+                fatalError("\(#function) invoked while still in state \(self.state)")
+            case .initializing:
+                fatalError("Subscribe to consumer group / assign to topic partition pair before committing offsets")
+            case .consumptionStopped(let client),
+                 .consuming(let client, _, _),
+                 .finishing(let client):
+                return .allowed(client: client)
+            case .finished:
+                return .denied(error: "Cannot perform reblance actions, consumer stopped")
             }
         }
 

@@ -149,6 +149,7 @@ final class RDKafkaClient: Sendable {
         case deliveryReport(results: [KafkaDeliveryReport])
         case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
         case statistics(KafkaStatistics)
+        case rebalance(RDKafkaRebalanceAction)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -182,7 +183,8 @@ final class RDKafkaClient: Sendable {
             case .statistics:
                 events.append(self.handleStatistics(event))
             case .rebalance:
-                fatalError("Rebalance is triggered")
+                events.append(self.handleRebalance(event))
+//                fatalError("Rebalance is triggered")
             case .none:
                 // Finished reading events, return early
                 return events
@@ -237,6 +239,27 @@ final class RDKafkaClient: Sendable {
     private func handleStatistics(_ event: OpaquePointer?) -> KafkaEvent {
         let jsonStr = String(cString: rd_kafka_event_stats(event))
         return .statistics(KafkaStatistics(jsonString: jsonStr))
+    }
+    
+    private func handleRebalance(_ event: OpaquePointer?) -> KafkaEvent {
+        guard let partitions = rd_kafka_event_topic_partition_list(event) else {
+            fatalError("Must never happen") // TODO: remove
+        }
+        
+        
+        let code = rd_kafka_event_error(event)
+        
+        let protoStringDef = String(cString: rd_kafka_rebalance_protocol(kafkaHandle))
+        let rebalanceProtocol = RDKafkaRebalanceProtocol.rebalanceProtocol(from: protoStringDef)
+        let list = RDKafkaTopicPartitionList(from: partitions)
+        switch code {
+        case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+            return .rebalance(.assign(rebalanceProtocol, list))
+        case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+            return .rebalance(.revoke(rebalanceProtocol, list))
+        default:
+            return .rebalance(.error(rebalanceProtocol, list, KafkaError.rdKafkaError(wrapping: code)))
+        }
     }
 
     /// Handle event of type `RDKafkaEvent.log`.
@@ -339,6 +362,32 @@ final class RDKafkaClient: Sendable {
             let result = rd_kafka_assign(self.kafkaHandle, pointer)
             if result != RD_KAFKA_RESP_ERR_NO_ERROR {
                 throw KafkaError.rdKafkaError(wrapping: result)
+            }
+        }
+    }
+    
+    /// Atomic assignment of partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func incrementalAssign(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        try topicPartitionList.withListPointer { pointer in
+            let error = rd_kafka_incremental_assign(self.kafkaHandle, pointer)
+            defer { rd_kafka_error_destroy(error) }
+            let code = rd_kafka_error_code(error)
+            if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+                throw KafkaError.rdKafkaError(wrapping: code)
+            }
+        }
+    }
+    
+    /// Atomic assignment of partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func incrementalUnassign(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        try topicPartitionList.withListPointer { pointer in
+            let error = rd_kafka_incremental_unassign(self.kafkaHandle, pointer)
+            defer { rd_kafka_error_destroy(error) }
+            let code = rd_kafka_error_code(error)
+            if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+                throw KafkaError.rdKafkaError(wrapping: code)
             }
         }
     }
