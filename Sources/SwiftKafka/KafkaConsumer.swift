@@ -206,7 +206,7 @@ public final class KafkaConsumer: Sendable, Service {
     ) throws {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
-        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch]
+        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch, .rebalance /* TODO: add rebalance to config */]
         // Only listen to offset commit events when autoCommit is false
         if config.enableAutoCommit == false {
             subscribedEvents.append(.offsetCommit)
