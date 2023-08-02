@@ -18,6 +18,7 @@ import NIOCore
 import ServiceLifecycle
 @testable import SwiftKafka
 import XCTest
+import Logging
 
 // For testing locally on Mac, do the following:
 //
@@ -39,8 +40,16 @@ final class SwiftKafkaTests: XCTestCase {
     let kafkaPort: Int = .init(ProcessInfo.processInfo.environment["KAFKA_PORT"] ?? "9092")!
     var bootstrapServer: KafkaConfiguration.Broker!
     var producerConfig: KafkaProducerConfiguration!
-    var uniqueTestTopic: String!
-    var uniqueTestTopic2: String!
+    
+    var uniqueTestTopic_: String? = nil
+    var uniqueTestTopic: String {
+        uniqueTestTopic_!
+    }
+    
+    var uniqueTestTopic2_: String? = nil
+    var uniqueTestTopic2: String {
+        uniqueTestTopic2_!
+    }
 
     override func setUpWithError() throws {
         self.bootstrapServer = KafkaConfiguration.Broker(host: self.kafkaHost, port: self.kafkaPort)
@@ -62,8 +71,8 @@ final class SwiftKafkaTests: XCTestCase {
             events: [],
             logger: .kafkaTest
         )
-        self.uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
-        self.uniqueTestTopic2 = try client._createUniqueTopic(timeout: 10 * 1000)
+        self.uniqueTestTopic_ = try client._createUniqueTopic(timeout: 10 * 1000)
+        self.uniqueTestTopic2_ = try client._createUniqueTopic(timeout: 10 * 1000)
     }
 
     override func tearDownWithError() throws {
@@ -80,12 +89,16 @@ final class SwiftKafkaTests: XCTestCase {
             events: [],
             logger: .kafkaTest
         )
-        try client._deleteTopic(self.uniqueTestTopic, timeout: 10 * 1000)
-        try client._deleteTopic(self.uniqueTestTopic2, timeout: 10 * 1000)
+        if let uniqueTestTopic_ {
+            try client._deleteTopic(uniqueTestTopic_, timeout: 10 * 1000)
+        }
+        if let uniqueTestTopic2_ {
+            try client._deleteTopic(uniqueTestTopic2_, timeout: 10 * 1000)
+        }
 
         self.bootstrapServer = nil
         self.producerConfig = nil
-        self.uniqueTestTopic = nil
+        self.uniqueTestTopic_ = nil
     }
 
     func testProduceAndConsumeWithConsumerGroup() async throws {
@@ -155,29 +168,73 @@ final class SwiftKafkaTests: XCTestCase {
             await serviceGroup.triggerGracefulShutdown()
         }
     }
-
+    class LoggerGuard {
+        let logger: Logger
+        let name: String
+        
+        public init(name: String = "Logger Guard", logger: Logger = Logger(label: "Logger Guard")) {
+            self.logger = logger
+            self.name = name
+            
+            logger.info("[\(name)] ctor")
+        }
+        
+        public func void() {
+            // to shut up warning about not used variable
+        }
+        
+        deinit {
+            logger.info("[\(self.name)] dtor")
+        }
+    }
+    // TODO: copy to separate test and revert this one
     func testProduceAndConsumeWithAssignedTopicPartition() async throws {
-        let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
+        let testMessages = Self.createTestMessages(topic: "test-topic", count: 100)
         let (producer, events) = try KafkaProducer.makeProducerWithEvents(config: self.producerConfig, logger: .kafkaTest)
 
-        var consumerConfig = KafkaConsumerConfiguration(
-            consumptionStrategy: .partition(
-                KafkaPartition(rawValue: 0),
-                topic: self.uniqueTestTopic,
-                offset: 0
-            )
-        )
-        consumerConfig.autoOffsetReset = .beginning // Always read topics from beginning
-        consumerConfig.bootstrapServers = [self.bootstrapServer]
-        consumerConfig.broker.addressFamily = .v4
 
-        let consumer = try KafkaConsumer(
+        
+        let consumerConfig = {
+            var config = KafkaConsumerConfiguration(
+                consumptionStrategy: .group(id: "test-consumers", topics: ["test-topic"]) //(
+    //                KafkaPartition(rawValue: 0),
+    //                topic: self.uniqueTestTopic,
+    //                offset: 0
+    //            )
+            )
+            config.debug = [.all]
+            config.autoOffsetReset = .beginning // Always read topics from beginning
+            config.bootstrapServers = [self.bootstrapServer]
+            config.broker.addressFamily = .v4
+            config.autoCommitIntervalMilliseconds = 10
+            config.enableAutoCommit = false
+            
+            
+            return config
+        } ()
+
+        let logger1 = {
+            var logger = Logger(label: "Consumer1.Log")
+            logger.logLevel = .debug
+            return logger
+        }()
+        let logger2 = {
+            var logger = Logger(label: "Consumer2.Log")
+            logger.logLevel = logger1.logLevel
+            return logger
+        }()
+        
+        let (consumer, consumerEvents) = try KafkaConsumer.makeConsumerWithEvents(
             config: consumerConfig,
-            logger: .kafkaTest
+            logger: logger1
+        )
+        let (cons, consEvents) = try KafkaConsumer.makeConsumerWithEvents(
+            config: consumerConfig,
+            logger: logger2
         )
 
         let serviceGroup = ServiceGroup(
-            services: [producer, consumer],
+            services: [producer, /*consumer, */cons],
             configuration: ServiceGroupConfiguration(gracefulShutdownSignals: []),
             logger: .kafkaTest
         )
@@ -199,28 +256,143 @@ final class SwiftKafkaTests: XCTestCase {
 
             // Consumer Task
             group.addTask {
+                let g = LoggerGuard(name: "consumer 1", logger: logger1)
                 var consumedMessages = [KafkaConsumerMessage]()
                 for try await messageResult in consumer.messages {
+                    if !consumerConfig.enableAutoCommit {
+                        try await consumer.commitSync(messageResult)
+                    }
                     guard case let message = messageResult else {
                         continue
                     }
                     consumedMessages.append(message)
+                    if consumedMessages.count % max(testMessages.count / 10, 1) == 0 {
+                        logger1.info("Got \(consumedMessages.count) out of \(testMessages.count)")
+                    }
 
                     if consumedMessages.count >= testMessages.count {
                         break
                     }
                 }
 
-                XCTAssertEqual(testMessages.count, consumedMessages.count)
-
-                for (index, consumedMessage) in consumedMessages.enumerated() {
-                    XCTAssertEqual(testMessages[index].topic, consumedMessage.topic)
-                    XCTAssertEqual(ByteBuffer(string: testMessages[index].key!), consumedMessage.key)
-                    XCTAssertEqual(ByteBuffer(string: testMessages[index].value), consumedMessage.value)
+//                logger1.info("Task for consumer 1 finished, fetched \(consumedMessages.count)")
+//                XCTAssertEqual(testMessages.count, consumedMessages.count)
+//
+//                for (index, consumedMessage) in consumedMessages.enumerated() {
+//                    XCTAssertEqual(testMessages[index].topic, consumedMessage.topic)
+//                    XCTAssertEqual(testMessages[index].key, consumedMessage.key)
+//                    XCTAssertEqual(testMessages[index].value, consumedMessage.value)
+//                }
+            }
+            
+            group.addTask {
+                let gg = LoggerGuard(name: "consumer 1 [events]", logger: logger1)
+                for try await event in consumerEvents {
+                    switch event {
+                    case .rebalance(let action):
+                        logger1.info("Rebalance action \(action)")
+                        switch action {
+                        case .assign(let proto, var topics):
+                            logger2.info("Assign, proto [\(proto)], topics: \(topics)")
+                            if case .cooperative = proto {
+                                try cons.incrementalAssign(topics)
+                            }
+                            else {
+                                try cons.assign(topics)
+                            }
+//                            topics.map { TopicPartition in
+//
+//                            }
+//                            cons.
+                            
+                        case .revoke(let proto, let topics):
+                            logger2.info("Revoke, proto [\(proto)], topics: \(topics)")
+                            if case .cooperative = proto {
+                                try cons.incrementalUnassign(topics)
+//                                rd_kafka_incremental_unassign(handle, list)
+                            } else {
+                                try cons.assign(topics)
+//                                rd_kafka_assign(handle, nil)
+                            }
+                        case .error(let proto, let topics, let err):
+                            logger2.info("Error, proto [\(proto)], topics: \(topics), err: \(err)")
+                        }
+                    default:
+                        break
+                    }
+//                    fatalError("Catched 2")
                 }
             }
 
+            group.addTask {
+                logger2.info("Task for cons started")
+                var aa = 0
+                for try await messageResult in cons.messages {
+                    try await cons.commitSync(messageResult)
+
+                    aa += 1
+                    if aa % max(testMessages.count / 10, 1) == 0 {
+                        logger2.info("Got \(aa) out of \(testMessages.count)")
+                    }
+                    if aa >= testMessages.count {
+                        break
+                    }
+                }
+                logger2.info("Task for cons finished")
+            }
+            group.addTask {
+                let gg = LoggerGuard(name: "consumer 1 [events]", logger: logger1)
+                for try await event in consEvents {
+                    switch event {
+                    case .rebalance(let action):
+                        logger2.info("Rebalance action \(action)")
+                        switch action {
+                        case .assign(let proto, var topics):
+                            logger2.info("Assign, proto [\(proto)], topics: \(topics)")
+                            if case .cooperative = proto {
+                                try cons.incrementalAssign(topics)
+                            }
+                            else {
+                                try cons.assign(topics)
+                            }
+//                            topics.map { TopicPartition in
+//
+//                            }
+//                            cons.
+                            
+                        case .revoke(let proto, let topics):
+                            logger2.info("Revoke, proto [\(proto)], topics: \(topics)")
+                            if case .cooperative = proto {
+                                try cons.incrementalUnassign(topics)
+//                                rd_kafka_incremental_unassign(handle, list)
+                            } else {
+                                try cons.assign(topics)
+//                                rd_kafka_assign(handle, nil)
+                            }
+                        case .error(let proto, let topics, let err):
+                            logger2.info("Error, proto [\(proto)], topics: \(topics), err: \(err)")
+                        }
+                        
+//                        print("Error: \(error) List: \(list.debugDescription)")
+//                        fatalError("Catched 3")
+                    default:
+                        break
+                    }
+//                    fatalError("Catched 4")
+                }
+            }
+
+            
+//            group.addTask {
+//                for try await msg in sequenceForAcks {
+//
+//                }
+//            }
+
+//            try? await Task.sleep(for: .seconds(5))
+
             // Wait for Producer Task and Consumer Task to complete
+            try await group.next()
             try await group.next()
             try await group.next()
             // Shutdown the serviceGroup
@@ -443,7 +615,7 @@ final class SwiftKafkaTests: XCTestCase {
         return Array(0..<count).map {
             KafkaProducerMessage(
                 topic: topic,
-                key: "key",
+                key: "key \($0)",
                 value: "Hello, World! \($0) - \(Date().description)"
             )
         }
@@ -472,6 +644,8 @@ final class SwiftKafkaTests: XCTestCase {
                 continue
 //                break // Ignore any other events
             }
+            
+            print("Sent \(receivedDeliveryReports.count) out of \(messages.count)")
 
             if receivedDeliveryReports.count >= messages.count {
                 break

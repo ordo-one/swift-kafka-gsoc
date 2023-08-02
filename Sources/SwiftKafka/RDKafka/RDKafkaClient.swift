@@ -155,6 +155,7 @@ final class RDKafkaClient: Sendable {
         case deliveryReport(results: [KafkaDeliveryReport])
         case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
         case statistics(KafkaStatistics)
+        case rebalance(RDKafkaRebalanceAction)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -187,6 +188,9 @@ final class RDKafkaClient: Sendable {
                 self.handleOffsetCommitEvent(event)
             case .statistics:
                 events.append(self.handleStatistics(event))
+            case .rebalance:
+                events.append(self.handleRebalance(event))
+//                fatalError("Rebalance is triggered")
             case .none:
                 // Finished reading events, return early
                 return events
@@ -242,6 +246,27 @@ final class RDKafkaClient: Sendable {
         let jsonStr = String(cString: rd_kafka_event_stats(event))
         return .statistics(KafkaStatistics(jsonString: jsonStr))
     }
+    
+    private func handleRebalance(_ event: OpaquePointer?) -> KafkaEvent {
+        guard let partitions = rd_kafka_event_topic_partition_list(event) else {
+            fatalError("Must never happen") // TODO: remove
+        }
+        
+        
+        let code = rd_kafka_event_error(event)
+        
+        let protoStringDef = String(cString: rd_kafka_rebalance_protocol(kafkaHandle))
+        let rebalanceProtocol = RDKafkaRebalanceProtocol.rebalanceProtocol(from: protoStringDef)
+        let list = RDKafkaTopicPartitionList(from: partitions)
+        switch code {
+        case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+            return .rebalance(.assign(rebalanceProtocol, list))
+        case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+            return .rebalance(.revoke(rebalanceProtocol, list))
+        default:
+            return .rebalance(.error(rebalanceProtocol, list, KafkaError.rdKafkaError(wrapping: code)))
+        }
+    }
 
     /// Handle event of type `RDKafkaEvent.log`.
     ///
@@ -290,6 +315,15 @@ final class RDKafkaClient: Sendable {
         guard let opaquePointer = rd_kafka_event_opaque(event) else {
             fatalError("Could not resolve reference to catpured Swift callback instance")
         }
+        
+        /*
+         let opaquePointer = rd_kafka_event_opaque(event)
+         guard let opaquePointer else {
+             let count = rd_kafka_event_message_count(event)
+             let str = String(cString: rd_kafka_event_name(event))
+             fatalError("Could not resolve reference to catpured Swift callback instance for count \(count) in event \(str)")
+         }
+         */
         let opaque = Unmanaged<CapturedCommitCallback>.fromOpaque(opaquePointer).takeUnretainedValue()
         let actualCallback = opaque.closure
 
@@ -335,6 +369,48 @@ final class RDKafkaClient: Sendable {
             if result != RD_KAFKA_RESP_ERR_NO_ERROR {
                 throw KafkaError.rdKafkaError(wrapping: result)
             }
+        }
+    }
+    
+    /// Atomic  incremental assignment of partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func incrementalAssign(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        let error = topicPartitionList.withListPointer { rd_kafka_incremental_assign(self.kafkaHandle, $0) }
+
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
+        }
+    }
+    
+    /// Atomic incremental unassignment of partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func incrementalUnassign(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        let error = topicPartitionList.withListPointer { rd_kafka_incremental_unassign(self.kafkaHandle, $0) }
+
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
+        }
+    }
+    
+    /// Seek for partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func seek(topicPartitionList: RDKafkaTopicPartitionList, timeout: Duration) async throws {
+        let doSeek = {
+            topicPartitionList.withListPointer { rd_kafka_seek_partitions(self.kafkaHandle, $0, timeout.totalMilliseconds) }
+        }
+        let error =
+            timeout == .zero
+            ? doSeek() // async when timeout is zero
+            : await performBlockingCall(queue: queue, body: doSeek)
+        
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
         }
     }
 
