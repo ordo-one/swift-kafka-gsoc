@@ -372,29 +372,45 @@ final class RDKafkaClient: Sendable {
         }
     }
     
-    /// Atomic assignment of partitions to consume.
+    /// Atomic  incremental assignment of partitions to consume.
     /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
     func incrementalAssign(topicPartitionList: RDKafkaTopicPartitionList) throws {
-        try topicPartitionList.withListPointer { pointer in
-            let error = rd_kafka_incremental_assign(self.kafkaHandle, pointer)
-            defer { rd_kafka_error_destroy(error) }
-            let code = rd_kafka_error_code(error)
-            if code != RD_KAFKA_RESP_ERR_NO_ERROR {
-                throw KafkaError.rdKafkaError(wrapping: code)
-            }
+        let error = topicPartitionList.withListPointer { rd_kafka_incremental_assign(self.kafkaHandle, $0) }
+
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
         }
     }
     
-    /// Atomic assignment of partitions to consume.
+    /// Atomic incremental unassignment of partitions to consume.
     /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
     func incrementalUnassign(topicPartitionList: RDKafkaTopicPartitionList) throws {
-        try topicPartitionList.withListPointer { pointer in
-            let error = rd_kafka_incremental_unassign(self.kafkaHandle, pointer)
-            defer { rd_kafka_error_destroy(error) }
-            let code = rd_kafka_error_code(error)
-            if code != RD_KAFKA_RESP_ERR_NO_ERROR {
-                throw KafkaError.rdKafkaError(wrapping: code)
-            }
+        let error = topicPartitionList.withListPointer { rd_kafka_incremental_unassign(self.kafkaHandle, $0) }
+
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
+        }
+    }
+    
+    /// Seek for partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func seek(topicPartitionList: RDKafkaTopicPartitionList, timeout: Duration) async throws {
+        let doSeek = {
+            topicPartitionList.withListPointer { rd_kafka_seek_partitions(self.kafkaHandle, $0, timeout.totalMilliseconds) }
+        }
+        let error =
+            timeout == .zero
+            ? doSeek() // async when timeout is zero
+            : await performBlockingCall(queue: queue, body: doSeek)
+        
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
         }
     }
 

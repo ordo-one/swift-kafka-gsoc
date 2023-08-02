@@ -165,10 +165,37 @@ extension RDKafkaTopicPartitionList : CustomDebugStringConvertible {
     }
 }
 
+// Strange thing is:
+// Method 'makeIterator()' must be declared public because it matches a requirement in public protocol 'Sequence'
+// or: Method cannot be declared public because its result uses an internal type
+//extension RDKafkaTopicPartitionList: Sequence {
+//    struct RDKafkaTopicPartitionIterator : IteratorProtocol {
+//        private var list: RDKafkaTopicPartitionList?
+//        private var idx = 0
+//
+//        init(list: RDKafkaTopicPartitionList) {
+//            self.list = list
+//        }
+//
+//        mutating func next() -> RDKafkaTopicPartition? {
+//            guard let topic = list?.getByIdx(idx: idx) else {
+//                list = nil
+//                return nil
+//            }
+//            idx += 1
+//            return topic
+//        }
+//    }
+//
+//    public func makeIterator() -> RDKafkaTopicPartitionIterator {
+//        RDKafkaTopicPartitionIterator(list: self)
+//    }
+//}
+
 struct RDKafkaTopicPartition {
     // save list to avoid destruction of unowned `topicPartition`
     private let list: RDKafkaTopicPartitionList
-    private let topicPartition: rd_kafka_topic_partition_t
+    let topicPartition: rd_kafka_topic_partition_t
     
     init(_ list: RDKafkaTopicPartitionList, _ topicPartition: rd_kafka_topic_partition_t) {
         self.list = list

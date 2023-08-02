@@ -329,7 +329,7 @@ public final class KafkaConsumer: Sendable, Service {
     // FIXME: it can be internal, instead of that make some
     // FIXME: `Rebalance` struct that would call client assign()/assignIncremental()/unassignIncremental()
     public func assign(_ list: KafkaTopicList) throws {
-        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
         switch action {
         case .allowed(let client):
             try client.assign(topicPartitionList: list.list)
@@ -339,7 +339,7 @@ public final class KafkaConsumer: Sendable, Service {
     }
     
     public func incrementalAssign(_ list: KafkaTopicList) throws {
-        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
         switch action {
         case .allowed(let client):
             try client.incrementalAssign(topicPartitionList: list.list)
@@ -349,7 +349,7 @@ public final class KafkaConsumer: Sendable, Service {
     }
     
     public func incrementalUnassign(_ list: KafkaTopicList) throws {
-        let action = self.stateMachine.withLockedValue { $0.rebalance() }
+        let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
         switch action {
         case .allowed(let client):
             try client.incrementalUnassign(topicPartitionList: list.list)
@@ -358,6 +358,16 @@ public final class KafkaConsumer: Sendable, Service {
         }
     }
     
+    // TODO: add docc: timeout = 0 -> async (no errors reported)
+    public func seek(_ list: KafkaTopicList, timeout: Duration = .kafkaNoWaitTransaction) async throws {
+        let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
+        switch action {
+        case .allowed(let client):
+            try await client.seek(topicPartitionList: list.list, timeout: timeout)
+        case .denied(let err):
+            throw KafkaError.client(reason: err)
+        }
+    }
 
     /// Start polling Kafka for messages.
     ///
@@ -739,7 +749,7 @@ extension KafkaConsumer {
         }
 
         
-        func rebalance() -> RebalanceAction {
+        func seekOrRebalance() -> RebalanceAction {
             switch self.state {
             case .uninitialized:
                 fatalError("\(#function) invoked while still in state \(self.state)")
