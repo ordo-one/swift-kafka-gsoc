@@ -14,6 +14,7 @@
 
 import struct Foundation.UUID
 import Logging
+import NIOConcurrencyHelpers
 import ServiceLifecycle
 @testable import SwiftKafka
 import XCTest
@@ -84,5 +85,54 @@ final class KafkaConsumerTests: XCTestCase {
                 "Expected log \(expectedLog) but was not found"
             )
         }
+    }
+
+    func testConsumerStatistics() async throws {
+        let uniqueGroupID = UUID().uuidString
+        var config = KafkaConsumerConfiguration(
+            consumptionStrategy: .group(id: uniqueGroupID, topics: ["this-topic-does-not-exist"])
+        )
+        config.statisticsInterval = Duration.milliseconds(10)
+
+        let statistics = NIOLockedValueBox<KafkaStatistics?>(nil)
+        let (consumer, events) = try KafkaConsumer.makeConsumerWithEvents(config: config, logger: .kafkaTest)
+
+        let serviceGroup = ServiceGroup(
+            services: [consumer],
+            configuration: ServiceGroupConfiguration(gracefulShutdownSignals: []),
+            logger: .kafkaTest
+        )
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Run Task
+            group.addTask {
+                try await serviceGroup.run()
+            }
+
+            // check for librdkafka statistics
+            group.addTask {
+                for try await event in events {
+                    if case let .statistics(stat) = event {
+                        statistics.withLockedValue {
+                            $0 = stat
+                        }
+                        break
+                    }
+                }
+            }
+
+            try await group.next()
+
+            // Shutdown the serviceGroup
+            await serviceGroup.triggerGracefulShutdown()
+        }
+
+        let stats = statistics.withLockedValue { $0 }
+        guard let stats else {
+            XCTFail("stats are not occurred")
+            return
+        }
+        XCTAssertFalse(stats.jsonString.isEmpty)
+        XCTAssertNoThrow(try stats.json)
     }
 }

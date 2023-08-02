@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 import Logging
+import NIOConcurrencyHelpers
 import NIOCore
 import ServiceLifecycle
 @testable import SwiftKafka
@@ -354,5 +355,52 @@ final class KafkaProducerTests: XCTestCase {
         events = nil
 
         XCTAssertNil(producerCopy)
+    }
+
+    func testProducerStatistics() async throws {
+        self.config.statisticsInterval = Duration.milliseconds(10)
+        self.config.debug = [.all]
+
+        let statistics = NIOLockedValueBox<KafkaStatistics?>(nil)
+        let (producer, events) = try KafkaProducer.makeProducerWithEvents(
+            config: self.config,
+            logger: .kafkaTest
+        )
+
+        let serviceGroup = ServiceGroup(
+            services: [producer],
+            configuration: ServiceGroupConfiguration(gracefulShutdownSignals: []),
+            logger: .kafkaTest
+        )
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Run Task
+            group.addTask {
+                try await serviceGroup.run()
+            }
+
+            // check for librdkafka statistics
+            group.addTask {
+                for try await e in events {
+                    if case let .statistics(stat) = e {
+                        statistics.withLockedValue {
+                            $0 = stat
+                        }
+                        break
+                    }
+                }
+            }
+
+            try await group.next()
+            // Shutdown the serviceGroup
+            await serviceGroup.triggerGracefulShutdown()
+        }
+        let stats = statistics.withLockedValue { $0 }
+        guard let stats else {
+            XCTFail("stats are not occurred")
+            return
+        }
+        XCTAssertFalse(stats.jsonString.isEmpty)
+        XCTAssertNoThrow(try stats.json)
     }
 }
