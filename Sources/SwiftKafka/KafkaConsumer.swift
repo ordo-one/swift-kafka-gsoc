@@ -494,6 +494,10 @@ public final class KafkaConsumer: Sendable, Service {
             }
         }
     }
+
+    func client() throws -> RDKafkaClient {
+        return try self.stateMachine.withLockedValue { try $0.client() }
+    }
 }
 
 // MARK: - KafkaConsumer + StateMachine
@@ -791,6 +795,23 @@ extension KafkaConsumer {
                 return .triggerGracefulShutdown(client: client)
             case .finishing, .finished:
                 return nil
+            }
+        }
+
+        func client() throws -> RDKafkaClient {
+            switch self.state {
+            case .uninitialized:
+                fatalError("\(#function) invoked while still in state \(self.state)")
+            case .initializing(let client, _, _):
+                return client
+            case .consuming(let client, _, _):
+                return client
+            case .consumptionStopped(let client):
+                return client
+            case .finishing(let client):
+                return client
+            case .finished:
+                throw KafkaError.client(reason: "Client is stopped")
             }
         }
     }

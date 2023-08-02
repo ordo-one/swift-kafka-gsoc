@@ -15,7 +15,7 @@
 import Crdkafka
 
 /// Swift wrapper type for `rd_kafka_topic_partition_list_t`.
-final class RDKafkaTopicPartitionList {
+public final class RDKafkaTopicPartitionList {
     private let _internal: UnsafeMutablePointer<rd_kafka_topic_partition_list_t>
 
     /// Create a new topic+partition list.
@@ -62,6 +62,14 @@ final class RDKafkaTopicPartitionList {
     func withListPointer<T>(_ body: (UnsafeMutablePointer<rd_kafka_topic_partition_list_t>) throws -> T) rethrows -> T {
         return try body(self._internal)
     }
+
+    /// Scoped accessor that enables safe access to the pointer of the underlying `rd_kafka_topic_partition_t`.
+    /// - Warning: Do not escape the pointer from the closure for later use.
+    /// - Parameter body: The closure will use the pointer.
+    @discardableResult
+    func withListPointer<T>(_ body: (UnsafeMutablePointer<rd_kafka_topic_partition_list_t>) async throws -> T) async rethrows -> T {
+        return try await body(self._internal)
+    }
     
     func sorted() -> RDKafkaTopicPartitionList {
         let partitions = rd_kafka_topic_partition_list_copy(self._internal)
@@ -94,7 +102,7 @@ extension RDKafkaTopicPartitionList : Hashable {
              rd_kafka_resp_err_t err; /**< Error code, depending on use. */
      */
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         for idx in 0..<Int(self._internal.pointee.cnt) {
             // FIXME: probably we should only take hash from `topic/offset/partition`?
             let elem = self._internal.pointee.elems[idx]
@@ -110,7 +118,7 @@ extension RDKafkaTopicPartitionList : Hashable {
         }
     }
     
-    static func == (lhs: RDKafkaTopicPartitionList, rhs: RDKafkaTopicPartitionList) -> Bool {
+    public static func == (lhs: RDKafkaTopicPartitionList, rhs: RDKafkaTopicPartitionList) -> Bool {
         guard lhs._internal.pointee.cnt == rhs._internal.pointee.cnt else {
             return false
         }
