@@ -154,6 +154,7 @@ final class RDKafkaClient: Sendable {
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
         case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
+        case statistics(KafkaStatistics)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -184,6 +185,8 @@ final class RDKafkaClient: Sendable {
                 self.handleLogEvent(event)
             case .offsetCommit:
                 self.handleOffsetCommitEvent(event)
+            case .statistics:
+                events.append(self.handleStatistics(event))
             case .none:
                 // Finished reading events, return early
                 return events
@@ -233,6 +236,11 @@ final class RDKafkaClient: Sendable {
             return .consumerMessages(result: .failure(error))
         }
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
+    }
+
+    private func handleStatistics(_ event: OpaquePointer?) -> KafkaEvent {
+        let jsonStr = String(cString: rd_kafka_event_stats(event))
+        return .statistics(KafkaStatistics(jsonString: jsonStr))
     }
 
     /// Handle event of type `RDKafkaEvent.log`.
@@ -586,18 +594,4 @@ final class RDKafkaClient: Sendable {
         }
         throw KafkaError.transactionOutOfAttempts(numOfAttempts: attempts)
     }
-}
-
-extension Duration {
-    // Internal usage only: librdkafka accepts Int32 as timeouts
-    internal var totalMilliseconds: Int32 {
-        return Int32(self.components.seconds * 1000 + self.components.attoseconds / 1_000_000_000_000_000)
-    }
-
-    internal var totalMillisecondsOrMinusOne: Int32 {
-        return max(self.totalMilliseconds, -1)
-    }
-
-    public static var kafkaUntilEndOfTransactionTimeout: Duration = .milliseconds(-1)
-    public static var kafkaNoWaitTransaction: Duration = .zero
 }

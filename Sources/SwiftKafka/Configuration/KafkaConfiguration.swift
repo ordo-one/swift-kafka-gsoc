@@ -206,3 +206,17 @@ public enum KafkaConfiguration {
         public static let v6 = IPAddressFamily(description: "v6")
     }
 }
+
+extension Duration {
+    // Internal usage only: librdkafka accepts Int32 as timeouts
+    internal var totalMilliseconds: Int32 {
+        return Int32(self.components.seconds * 1000 + self.components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    internal var totalMillisecondsOrMinusOne: Int32 {
+        return max(self.totalMilliseconds, -1)
+    }
+
+    public static var kafkaUntilEndOfTransactionTimeout: Duration = .milliseconds(-1)
+    public static var kafkaNoWaitTransaction: Duration = .zero
+}

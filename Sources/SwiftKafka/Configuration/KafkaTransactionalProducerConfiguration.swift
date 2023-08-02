@@ -33,6 +33,18 @@ public struct KafkaTransactionalProducerConfiguration {
         }
     }
 
+    /// Interval for librdkafka statistics reports
+    /// 0ms - disabled
+    /// >= 1ms - statistics provided every specified interval
+    public var statisticsInterval: Duration = .zero {
+        didSet {
+            precondition(
+                self.statisticsInterval.totalMilliseconds > 0 || self.statisticsInterval == .zero /*self.statisticsInterval.canBeRepresentedAsMilliseconds*/,
+                "Lowest granularity is milliseconds"
+            )
+        }
+    }
+
     // MARK: - Producer-specific Config Properties
 
     /// When set to true, the producer will ensure that messages are successfully produced exactly once and in the original produce order. The following configuration properties are adjusted automatically (if not modified by the user) when idempotence is enabled: max.in.flight.requests.per.connection=5 (must be less than or equal to 5), retries=INT32_MAX (must be greater than 0), acks=all, queuing.strategy=fifo. Producer instantation will fail if user-supplied configuration is incompatible.

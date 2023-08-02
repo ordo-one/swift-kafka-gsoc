@@ -23,6 +23,11 @@ internal protocol KafkaProducerSharedProperties: Sendable, Hashable {
     /// Maximum timeout for flushing outstanding produce requests when the ``KakfaProducer`` is shutting down.
     /// Default: `10000`
     var flushTimeoutMilliseconds: Int { get }
+    
+    /// Interval for librdkafka statistics reports
+    /// 0ms - disabled
+    /// >= 1ms - statistics provided every specified interval
+    var statisticsInterval: Duration { get }
 
     // MARK: - Producer-specific Config Properties
 
@@ -98,6 +103,7 @@ extension KafkaProducerSharedProperties {
     internal var sharedPropsDictionary: [String: String] {
         var resultDict: [String: String] = [:]
 
+        resultDict["statistics.interval.ms"] = String(self.statisticsInterval.totalMilliseconds)
         resultDict["enable.idempotence"] = String(self.enableIdempotence)
         resultDict["queue.buffering.max.messages"] = String(self.queue.bufferingMaxMessages)
         resultDict["queue.buffering.max.kbytes"] = String(self.queue.bufferingMaxKBytes)
