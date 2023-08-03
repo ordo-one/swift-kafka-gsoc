@@ -23,7 +23,7 @@ public struct KafkaTopicList {
     }
     
     public func append(topic: TopicPartition) {
-        self.list.setOffset(topic: topic.topic, partition: topic.partition, offset: topic.offset.rawValue)
+        self.list.setOffset(topic: topic.topic, partition: topic.partition, offset: topic.offset)
     }
 }
 

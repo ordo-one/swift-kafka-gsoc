@@ -315,13 +315,13 @@ public final class KafkaConsumer: Sendable, Service {
     private func assign(
         topic: String,
         partition: KafkaPartition,
-        offset: Int
+        offset: KafkaOffset.RawValue
     ) throws {
         let action = self.stateMachine.withLockedValue { $0.setUpConnection() }
         switch action {
         case .setUpConnection(let client):
             let assignment = RDKafkaTopicPartitionList()
-            assignment.setOffset(topic: topic, partition: partition, offset: Int64(offset))
+            assignment.setOffset(topic: topic, partition: partition, offset: KafkaOffset(rawValue: offset))
             try client.assign(topicPartitionList: assignment)
         }
     }

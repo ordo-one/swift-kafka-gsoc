@@ -746,7 +746,7 @@ final class SwiftKafkaTests: XCTestCase {
                         )
                         try transaction.send(newMessage)
                         let partitionlist = RDKafkaTopicPartitionList()
-                        partitionlist.setOffset(topic: self.uniqueTestTopic, partition: message.partition, offset: Int64(message.offset))
+                        partitionlist.setOffset(topic: self.uniqueTestTopic, partition: message.partition, offset: message.offset)
                         try await transaction.send(offsets: partitionlist, forConsumer: consumer)
                     }
 

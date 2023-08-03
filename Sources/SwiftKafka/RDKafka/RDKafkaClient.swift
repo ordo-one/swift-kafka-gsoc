@@ -436,7 +436,7 @@ final class RDKafkaClient: Sendable {
         changesList.setOffset(
             topic: message.topic,
             partition: message.partition,
-            offset: Int64(message.offset + 1)
+            offset: KafkaOffset(rawValue: message.offset.rawValue + 1)
         )
 
         let error = changesList.withListPointer { listPointer in
@@ -473,7 +473,7 @@ final class RDKafkaClient: Sendable {
             changesList.setOffset(
                 topic: message.topic,
                 partition: message.partition,
-                offset: Int64(message.offset + 1)
+                offset: KafkaOffset(rawValue: message.offset.rawValue + 1)
             )
 
             // Unretained pass because the reference that librdkafka holds to capturedClosure

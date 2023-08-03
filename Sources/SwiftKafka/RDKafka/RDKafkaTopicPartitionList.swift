@@ -44,7 +44,7 @@ public final class RDKafkaTopicPartitionList {
     }
 
     /// Manually set read offset for a given topic+partition pair.
-    func setOffset(topic: String, partition: KafkaPartition, offset: Int64) {
+    func setOffset(topic: String, partition: KafkaPartition, offset: KafkaOffset) {
         guard let partitionPointer = rd_kafka_topic_partition_list_add(
             self._internal,
             topic,
@@ -52,7 +52,7 @@ public final class RDKafkaTopicPartitionList {
         ) else {
             fatalError("rd_kafka_topic_partition_list_add returned invalid pointer")
         }
-        partitionPointer.pointee.offset = offset
+        partitionPointer.pointee.offset = offset.rawValue
     }
 
     /// Scoped accessor that enables safe access to the pointer of the underlying `rd_kafka_topic_partition_t`.
