@@ -120,8 +120,8 @@ public struct KafkaTransactionalProducerConfiguration {
     public var securityProtocol: KafkaConfiguration.SecurityProtocol = .plaintext
 
     // TODO: add Docc
-    var transactionalId: String
-    var transactionsTimeout: Duration = .seconds(60) // equal to socket TODO: add didSet
+    public var transactionalId: String
+    public var transactionsTimeout: Duration = .seconds(60) // equal to socket TODO: add didSet
 
     public init(transactionalId: String) {
         self.transactionalId = transactionalId

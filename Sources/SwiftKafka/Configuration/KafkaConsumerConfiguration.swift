@@ -34,6 +34,9 @@ public struct KafkaConsumerConfiguration {
             )
         }
     }
+    
+    // TODO: docc
+    public var listenForRebalance: Bool = false
 
     /// The strategy used for consuming messages.
     /// See ``KafkaConfiguration/ConsumptionStrategy`` for more information.

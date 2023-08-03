@@ -210,7 +210,10 @@ public final class KafkaConsumer: Sendable, Service {
     ) throws {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
-        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch, .rebalance /* TODO: add rebalance to config */]
+        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch]
+        if config.listenForRebalance {
+            subscribedEvents.append(.rebalance)
+        }
         // Only listen to offset commit events when autoCommit is false
         if config.enableAutoCommit == false {
             subscribedEvents.append(.offsetCommit)
@@ -250,7 +253,10 @@ public final class KafkaConsumer: Sendable, Service {
     ) throws -> (KafkaConsumer, KafkaConsumerEvents) {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
-        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch, .rebalance /* TODO: add rebalance to config */]
+        var subscribedEvents: [RDKafkaEvent] = [.log, .fetch]
+        if config.listenForRebalance {
+            subscribedEvents.append(.rebalance)
+        }
         // Only listen to offset commit events when autoCommit is false
         if config.enableAutoCommit == false {
             subscribedEvents.append(.offsetCommit)
@@ -304,6 +310,18 @@ public final class KafkaConsumer: Sendable, Service {
             }
             try client.subscribe(topicPartitionList: subscription)
         }
+    }
+    
+    public func subscribeTopics(topics: [String]) throws {
+        let client = try self.client()
+        let subscription = RDKafkaTopicPartitionList()
+        for topic in topics {
+            subscription.add(
+                topic: topic,
+                partition: KafkaPartition.unassigned
+            )
+        }
+        try client.subscribe(topicPartitionList: subscription)
     }
 
     /// Assign the``KafkaConsumer`` to a specific `partition` of a `topic`.

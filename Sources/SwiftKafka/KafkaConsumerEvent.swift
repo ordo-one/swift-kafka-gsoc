@@ -22,6 +22,10 @@ public struct KafkaTopicList {
         self.list = from
     }
     
+    public init(size: Int32 = 1) {
+        self.list = RDKafkaTopicPartitionList(size: size)
+    }
+    
     public func append(topic: TopicPartition) {
         self.list.setOffset(topic: topic.topic, partition: topic.partition, offset: topic.offset)
     }

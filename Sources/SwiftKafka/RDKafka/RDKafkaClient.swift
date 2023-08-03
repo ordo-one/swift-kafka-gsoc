@@ -353,6 +353,9 @@ final class RDKafkaClient: Sendable {
     /// Subscribe to topic set using balanced consumer groups.
     /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
     func subscribe(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        if topicPartitionList.getByIdx(idx: 0) == nil {
+            return // empty list, FIXME: to subscribe after init
+        }
         try topicPartitionList.withListPointer { pointer in
             let result = rd_kafka_subscribe(self.kafkaHandle, pointer)
             if result != RD_KAFKA_RESP_ERR_NO_ERROR {
