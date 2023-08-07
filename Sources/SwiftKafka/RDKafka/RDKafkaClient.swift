@@ -190,7 +190,6 @@ final class RDKafkaClient: Sendable {
                 events.append(self.handleStatistics(event))
             case .rebalance:
                 events.append(self.handleRebalance(event))
-//                fatalError("Rebalance is triggered")
             case .none:
                 // Finished reading events, return early
                 return events

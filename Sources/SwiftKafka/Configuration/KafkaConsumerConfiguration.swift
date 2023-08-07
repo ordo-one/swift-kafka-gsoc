@@ -37,6 +37,7 @@ public struct KafkaConsumerConfiguration {
     
     // TODO: docc
     public var listenForRebalance: Bool = false
+    public var isolationLevel: String? = nil // TODO: remove/temporary
 
     /// The strategy used for consuming messages.
     /// See ``KafkaConfiguration/ConsumptionStrategy`` for more information.
@@ -141,6 +142,10 @@ extension KafkaConsumerConfiguration {
             resultDict["group.id"] = UUID().uuidString
         case .group(groupID: let groupID, topics: _):
             resultDict["group.id"] = groupID
+        }
+        
+        if let isolationLevel {
+            resultDict["isolation.level"] = isolationLevel
         }
 
         resultDict["statistics.interval.ms"] = String(self.statisticsInterval.totalMilliseconds)

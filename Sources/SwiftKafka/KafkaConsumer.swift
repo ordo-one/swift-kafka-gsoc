@@ -719,7 +719,7 @@ extension KafkaConsumer {
                 fatalError("Cannot store offset when consumption has been stopped")
             case .consuming(let client, _, _):
                 return .storeOffset(client: client)
-            case .finishing, .finished:
+            case .finishing, .finished: // TODO: throw an exception
                 fatalError("\(#function) invoked while still in state \(self.state)")
             }
         }
