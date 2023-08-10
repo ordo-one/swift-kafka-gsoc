@@ -218,6 +218,9 @@ public final class KafkaConsumer: Sendable, Service {
         if config.enableAutoCommit == false {
             subscribedEvents.append(.offsetCommit)
         }
+        if config.statisticsInterval != .zero {
+            subscribedEvents.append(.statistics)
+        }
 
         let client = try RDKafkaClient.makeClient(
             type: .consumer,
@@ -377,11 +380,21 @@ public final class KafkaConsumer: Sendable, Service {
     }
     
     // TODO: add docc: timeout = 0 -> async (no errors reported)
-    public func seek(_ list: KafkaTopicList, timeout: Duration = .kafkaNoWaitTransaction) async throws {
+    public func seek(_ list: KafkaTopicList, timeout: Duration) async throws {
         let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
         switch action {
         case .allowed(let client):
             try await client.seek(topicPartitionList: list.list, timeout: timeout)
+        case .denied(let err):
+            throw KafkaError.client(reason: err)
+        }
+    }
+
+    public func seek(_ list: KafkaTopicList) throws {
+        let action = self.stateMachine.withLockedValue { $0.seekOrRebalance() }
+        switch action {
+        case .allowed(let client):
+            try client.seek(topicPartitionList: list.list)
         case .denied(let err):
             throw KafkaError.client(reason: err)
         }
@@ -717,9 +730,9 @@ extension KafkaConsumer {
                 fatalError("Subscribe to consumer group / assign to topic partition pair before committing offsets")
             case .consumptionStopped:
                 fatalError("Cannot store offset when consumption has been stopped")
-            case .consuming(let client, _, _):
+            case .consuming(let client, _, _), .finishing(let client):
                 return .storeOffset(client: client)
-            case .finishing, .finished: // TODO: throw an exception
+            case .finished: // TODO: throw an exception
                 fatalError("\(#function) invoked while still in state \(self.state)")
             }
         }

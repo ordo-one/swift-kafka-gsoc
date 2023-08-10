@@ -44,13 +44,26 @@ final class RDKafkaClient: Sendable {
 
     // Use factory method to initialize
     private init(
+        type: ClientType,
         kafkaHandle: OpaquePointer,
         logger: Logger
     ) {
         self.kafkaHandle = kafkaHandle
         self.logger = logger
 
-        self.mainQueue = rd_kafka_queue_get_main(self.kafkaHandle)
+        if type == .consumer {
+            if let consumerQueue = rd_kafka_queue_get_consumer(self.kafkaHandle) {
+                // (Important)
+                // Polling the queue counts as a consumer poll, and will reset the timer for `max.poll.interval.ms`.
+                self.mainQueue = consumerQueue
+            } else {
+                // Getting consumer queue failed, use main queue.
+                // better fixed in upstream
+                fatalError("Just for now")
+            }
+        } else {
+            self.mainQueue = rd_kafka_queue_get_main(self.kafkaHandle)
+        }
 
         rd_kafka_set_log_queue(self.kafkaHandle, self.mainQueue)
     }
@@ -94,7 +107,7 @@ final class RDKafkaClient: Sendable {
             throw KafkaError.client(reason: errorString)
         }
 
-        return RDKafkaClient(kafkaHandle: handle, logger: logger)
+        return RDKafkaClient(type: type, kafkaHandle: handle, logger: logger)
     }
 
     /// Produce a message to the Kafka cluster.
@@ -408,6 +421,20 @@ final class RDKafkaClient: Sendable {
             timeout == .zero
             ? doSeek() // async when timeout is zero
             : await performBlockingCall(queue: queue, body: doSeek)
+        
+        defer { rd_kafka_error_destroy(error) }
+        let code = rd_kafka_error_code(error)
+        if code != RD_KAFKA_RESP_ERR_NO_ERROR {
+            throw KafkaError.rdKafkaError(wrapping: code)
+        }
+    }
+
+    /// Seek for partitions to consume.
+    /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
+    func seek(topicPartitionList: RDKafkaTopicPartitionList) throws {
+        let error = topicPartitionList.withListPointer {
+            rd_kafka_seek_partitions(self.kafkaHandle, $0, 0)
+        }
         
         defer { rd_kafka_error_destroy(error) }
         let code = rd_kafka_error_code(error)
