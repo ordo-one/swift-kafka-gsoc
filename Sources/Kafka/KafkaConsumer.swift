@@ -429,12 +429,7 @@ public final class KafkaConsumer: Sendable, Service {
             let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
             switch nextAction {
             case .pollForAndYieldMessage(let client, let source, let eventSource):
-                if !producing {
-                    maxEvents = 1
-                } else {
-                    maxEvents = 100
-                }
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents, consumer: true)
                 for event in events {
                     switch event {
                     case .consumerMessages(let results):
@@ -461,10 +456,11 @@ public final class KafkaConsumer: Sendable, Service {
                     }
                 }
                 logger.trace("Processed \(events.count) shouldSleep: \(shouldSleep), pollInterval: \(pollInterval), maxEvents: \(maxEvents)")
-                /*if !producing {
-                    try await Task.sleep(for: configuration.maximumPollInterval - .milliseconds(100))
+                if !producing {
+                    pollInterval = min(self.configuration.maximumPollInterval - .milliseconds(100), pollInterval * 1.5)
+                    try await Task.sleep(for: pollInterval)
                 }
-                else */if shouldSleep || !producing {
+                else if shouldSleep {
                     pollInterval = min(self.configuration.pollInterval, pollInterval * 2)
                     try await Task.sleep(for: pollInterval)
                 } else {
@@ -476,7 +472,7 @@ public final class KafkaConsumer: Sendable, Service {
                 // We are just polling to serve any remaining events queued inside of `librdkafka`.
                 // All remaining queued consumer messages will get dropped and not be committed (marked as read).
                 //let events =
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents, consumer: true)
                 for event in events {
                     switch event {
                     case .rebalance(let type):

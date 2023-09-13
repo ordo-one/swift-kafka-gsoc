@@ -184,11 +184,15 @@ final class RDKafkaClient: Sendable {
     /// Poll the event `rd_kafka_queue_t` for new events.
     ///
     /// - Parameter maxEvents:Maximum number of events to serve in one invocation.
-    func eventPoll(events: inout [KafkaEvent], maxEvents: inout Int) -> Bool /* -> [KafkaEvent] */{
+    func eventPoll(events: inout [KafkaEvent], maxEvents: inout Int, consumer: Bool = false) -> Bool /* -> [KafkaEvent] */{
         events.removeAll(keepingCapacity: true)
         events.reserveCapacity(maxEvents)
-        
+
         var msgs = [KafkaConsumerMessage]()
+        if consumer {
+            msgs.reserveCapacity(maxEvents)
+        }
+
         var eofs = [KafkaConsumerMessage]()
         
         defer {
