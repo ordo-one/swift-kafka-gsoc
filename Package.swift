@@ -57,7 +57,7 @@ let package = Package(
         .target(
             name: "Crdkafka",
             dependencies: [
-                "COpenSSL",
+                //"COpenSSL",
                 .product(name: "libzstd", package: "zstd"),
             ],
             exclude: rdkafkaExclude,
@@ -69,8 +69,8 @@ let package = Package(
                 .headerSearchPath("./librdkafka/src"),
             ],
             linkerSettings: [
-                .linkedLibrary("curl"),
-                .linkedLibrary("sasl2"),
+                .linkedLibrary("curl", .when(platforms: [.macOS, .linux])),
+                .linkedLibrary("sasl2", .when(platforms: [.macOS, .linux])),
                 .linkedLibrary("z"), // zlib
             ]
         ),
@@ -90,6 +90,7 @@ let package = Package(
                 "Kafka",
             ]
         ),
+        /*
         .systemLibrary(
             name: "COpenSSL",
             pkgConfig: "openssl",
@@ -97,7 +98,7 @@ let package = Package(
                 .brew(["libressl"]),
                 .apt(["libssl-dev"]),
             ]
-        ),
+        ),*/
         .testTarget(
             name: "KafkaTests",
             dependencies: ["Kafka"]
