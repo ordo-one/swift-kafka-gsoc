@@ -111,6 +111,8 @@ public enum KafkaConsumerEvent: Sendable, Hashable {
             self = .statistics(stat)
         case .rebalance(let action):
             self = .rebalance(action)
+        case .error:
+            fatalError("Cannot cast \(event) to KafkaConsumerEvent") // handled in KafkaConsumer
         case .deliveryReport:
             fatalError("Cannot cast \(event) to KafkaConsumerEvent")
         case .consumerMessages:

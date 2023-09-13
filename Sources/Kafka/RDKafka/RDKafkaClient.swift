@@ -175,7 +175,8 @@ final class RDKafkaClient: Sendable {
     /// Swift wrapper for events from `librdkafka`'s event queue.
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
-        case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
+        case consumerMessages(results: [KafkaConsumerMessage])
+        case error(result: Error)
         case statistics(KafkaStatistics)
         case rebalance(RebalanceAction)
     }
@@ -184,20 +185,18 @@ final class RDKafkaClient: Sendable {
     ///
     /// - Parameter maxEvents:Maximum number of events to serve in one invocation.
     func eventPoll(events: inout [KafkaEvent], maxEvents: inout Int) -> Bool /* -> [KafkaEvent] */{
-//        var events = [KafkaEvent]()
         events.removeAll(keepingCapacity: true)
         events.reserveCapacity(maxEvents)
         
-        var shouldSleep = true
+        var msgs = [KafkaConsumerMessage]()
         
         defer {
-            if events.count >= maxEvents {
-                maxEvents *= 2
-//            } else if events.count < maxEvents / 2 {
-//                maxEvents /= 2
+            if !msgs.isEmpty {
+                events.append(.consumerMessages(results: msgs))
             }
-//            maxEvents = Swift.max(maxEvents, 1)
         }
+        
+        var shouldSleep = true
 
         for _ in 0..<maxEvents {
             let event = rd_kafka_queue_poll(self.queue, 0)
@@ -214,15 +213,17 @@ final class RDKafkaClient: Sendable {
                 events.append(forwardEvent)
                 shouldSleep = false
             case .fetch:
-//                logger.debug("Received event \(eventType)")
-                if let forwardEvent = self.handleFetchEvent(event) {
-                    events.append(forwardEvent)
-                    shouldSleep = false
+                do {
+                    if let msg = try self.handleFetchEvent(event) {
+                        msgs.append(msg)
+                        shouldSleep = false
+                    }
+                } catch {
+                    events.append(.error(result: error))
                 }
             case .log:
                 self.handleLogEvent(event)
             case .offsetCommit:
-//                logger.debug("Received event \(eventType)")
                 self.handleOffsetCommitEvent(event)
                 shouldSleep = false
             case .statistics:
@@ -232,25 +233,13 @@ final class RDKafkaClient: Sendable {
                 events.append(self.handleRebalance(event))
                 shouldSleep = false
             case .error:
-                #if true
                 let err = rd_kafka_event_error(event)
                 if err == RD_KAFKA_RESP_ERR__PARTITION_EOF {
                     let topicPartition = rd_kafka_event_topic_partition(event)
                     if let topicPartition {
-                        events.append(
-                            .consumerMessages(
-                                result: .success(
-                                    .init(topicPartitionPointer: topicPartition)
-                                )
-                            )
-                        )
+                        msgs.append(.init(topicPartitionPointer: topicPartition))
                     }
-//                    if let forwardEvent = self.handleFetchEvent(event) {
-//                        events.append(forwardEvent)
-//                    }
-//                    events.append(.consumerMessages(result: .failure(KafkaError.partitionEOF())))
                 }
-                #endif
                 break
             case .none:
                 // Finished reading events, return early
@@ -259,8 +248,6 @@ final class RDKafkaClient: Sendable {
                 break // Ignored Event
             }
         }
-        
-
 
         return shouldSleep
     }
@@ -289,19 +276,19 @@ final class RDKafkaClient: Sendable {
     ///
     /// - Parameter event: Pointer to underlying `rd_kafka_event_t`.
     /// - Returns: `KafkaEvent` to be returned as part of ``KafkaClient.eventPoll()`.
-    private func handleFetchEvent(_ event: OpaquePointer?) -> KafkaEvent? {
-        do {
+    private func handleFetchEvent(_ event: OpaquePointer?) throws -> KafkaConsumerMessage? {
+//        do {
             // RD_KAFKA_EVENT_FETCH only returns a single message:
             // https://docs.confluent.io/platform/current/clients/librdkafka/html/rdkafka_8h.html#a3a855eb7bdf17f5797d4911362a5fc7c
             if let messagePointer = rd_kafka_event_message_next(event) {
                 let message = try KafkaConsumerMessage(messagePointer: messagePointer)
-                return .consumerMessages(result: .success(message))
+                return message
             } else {
                 return nil
             }
-        } catch {
-            return .consumerMessages(result: .failure(error))
-        }
+//        } catch {
+//            return .consumerMessages(result: .failure(error))
+//        }
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
     }
 

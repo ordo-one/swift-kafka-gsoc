@@ -69,7 +69,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
     public typealias Element = KafkaConsumerMessage
 //    typealias BackPressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure
     typealias WrappedSequence = NIOThrowingAsyncSequenceProducer<
-        Element,
+        [Element],
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
 //        NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
@@ -82,10 +82,30 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
         let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
         var wrappedIterator: WrappedSequence.AsyncIterator?
 
-        public mutating func next() async throws -> Element? {
-            repeat {
-                guard let element = try await self.wrappedIterator?.next() else {
+        var bulk: [Element] = []
+        var idx: Int = 0
+        
+        private mutating func nextBulkElement() async throws -> Element? {
+            while true {
+                if idx < bulk.count {
+                    let element = bulk[idx]
+                    idx += 1
+                    return element
+                }
+                
+                guard let newBulk = try await self.wrappedIterator?.next() else {
                     self.deallocateIterator()
+                    return nil
+                }
+                
+                bulk = newBulk
+                idx = 0
+            }
+        }
+
+        public mutating func next() async throws -> Element? {
+            while true {
+                guard let element = try await nextBulkElement() else {
                     return nil
                 }
                 
@@ -103,7 +123,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
                     continue
                 }
                 return element
-            } while true
+            }
         }
 
         private mutating func deallocateIterator() {
@@ -124,7 +144,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
 /// A ``KafkaConsumer `` can be used to consume messages from a Kafka cluster.
 public final class KafkaConsumer: Sendable, Service {
     typealias Producer = NIOThrowingAsyncSequenceProducer<
-        KafkaConsumerMessage,
+        [KafkaConsumerMessage],
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
 //        NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
@@ -169,7 +189,7 @@ public final class KafkaConsumer: Sendable, Service {
         self.logger = logger
                 // TODO:+ [.rebalance]
         let sourceAndSequence = NIOThrowingAsyncSequenceProducer.makeSequence(
-            elementType: KafkaConsumerMessage.self,
+            elementType: [KafkaConsumerMessage].self,
             backPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark(lowWatermark: 50, highWatermark: 100),
 //            backPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure(),
             delegate: KafkaConsumerCloseOnTerminate(isMessageSequence: true, stateMachine: self.stateMachine)
@@ -430,24 +450,20 @@ public final class KafkaConsumer: Sendable, Service {
                 let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
                 for event in events {
                     switch event {
-                    case .consumerMessages(let result):
+                    case .consumerMessages(let results):
+                        let result = source.yield(results)
                         switch result {
-                        case .success(let message):
-                            // We do not support back pressure, we can ignore the yield result
-                            let result = source.yield(message)
-                            switch result {
-                            case .stopProducing:
-                                producing = false
-                            case .produceMore:
-                                producing = true
-                            case .dropped:
-                                break // ignore, sequence terminated
-                            }
-                        case .failure(let error):
-                            source.finish()
-                            eventSource?.finish()
-                            throw error
+                        case .stopProducing:
+                            producing = false
+                        case .produceMore:
+                            producing = true
+                        case .dropped:
+                            break // ignore, sequence terminated
                         }
+                    case .error(let error):
+                        source.finish()
+                        eventSource?.finish()
+                        throw error
                     case .statistics(let statistics):
                         _ = eventSource?.yield(.statistics(statistics))
                     case .rebalance(let rebalance):
