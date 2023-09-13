@@ -189,10 +189,14 @@ final class RDKafkaClient: Sendable {
         events.reserveCapacity(maxEvents)
         
         var msgs = [KafkaConsumerMessage]()
+        var eofs = [KafkaConsumerMessage]()
         
         defer {
             if !msgs.isEmpty {
                 events.append(.consumerMessages(results: msgs))
+            }
+            if !eofs.isEmpty {
+                events.append(.consumerMessages(results: eofs))
             }
         }
         
@@ -237,8 +241,11 @@ final class RDKafkaClient: Sendable {
                 if err == RD_KAFKA_RESP_ERR__PARTITION_EOF {
                     let topicPartition = rd_kafka_event_topic_partition(event)
                     if let topicPartition {
-                        msgs.append(.init(topicPartitionPointer: topicPartition))
+                        eofs.append(.init(topicPartitionPointer: topicPartition))
+//                        msgs.append(.init(topicPartitionPointer: topicPartition))
                     }
+                } else {
+                    events.append(.error(result: KafkaError.rdKafkaError(wrapping: err)))
                 }
                 break
             case .none:

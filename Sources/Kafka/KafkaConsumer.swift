@@ -63,13 +63,13 @@ public struct KafkaConsumerEvents: Sendable, AsyncSequence {
 // MARK: - KafkaConsumerMessages
 
 /// `AsyncSequence` implementation for handling messages received from the Kafka cluster (``KafkaConsumerMessage``).
-public struct KafkaConsumerMessages: Sendable, AsyncSequence {
+public struct KafkaBulkConsumerMessages: Sendable, AsyncSequence {
     let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
 
-    public typealias Element = KafkaConsumerMessage
+    public typealias Element = [KafkaConsumerMessage]
 //    typealias BackPressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure
     typealias WrappedSequence = NIOThrowingAsyncSequenceProducer<
-        [Element],
+        Element,
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
 //        NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
@@ -82,47 +82,33 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
         let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
         var wrappedIterator: WrappedSequence.AsyncIterator?
 
-        var bulk: [Element] = []
-        var idx: Int = 0
-        
-        private mutating func nextBulkElement() async throws -> Element? {
-            while true {
-                if idx < bulk.count {
-                    let element = bulk[idx]
-                    idx += 1
-                    return element
-                }
-                
-                guard let newBulk = try await self.wrappedIterator?.next() else {
-                    self.deallocateIterator()
-                    return nil
-                }
-                
-                bulk = newBulk
-                idx = 0
-            }
-        }
-
         public mutating func next() async throws -> Element? {
             while true {
-                guard let element = try await nextBulkElement() else {
+                guard let bulk = try await self.wrappedIterator?.next() else {
                     return nil
                 }
                 
-                let action = self.stateMachine.withLockedValue { $0.storeOffset() }
-                switch action {
-                case .storeOffset(let client):
-                    do {
-                        try client.storeMessageOffset(element)
-                    } catch {
-                        self.deallocateIterator()
-                        throw error
-                    }
-                }
-                if element.eof {
+                if bulk.isEmpty { //sanity
                     continue
                 }
-                return element
+
+                for element in bulk { // should we really do that?
+                    let action = self.stateMachine.withLockedValue { $0.storeOffset() }
+                    switch action {
+                    case .storeOffset(let client):
+                        do {
+                            try client.storeMessageOffset(element)
+                        } catch {
+                            self.deallocateIterator()
+                            throw error
+                        }
+                    }
+                }
+                
+                if bulk.last?.eof ?? false { // eof is always separate bulk
+                    continue
+                }
+                return bulk
             }
         }
 
@@ -164,7 +150,8 @@ public final class KafkaConsumer: Sendable, Service {
     private let stateMachine: NIOLockedValueBox<StateMachine>
 
     /// An asynchronous sequence containing messages from the Kafka cluster.
-    public let messages: KafkaConsumerMessages
+    public let messages: KafkaBulkConsumerMessages
+    
 
     // Private initializer, use factory method or convenience init to create KafkaConsumer
     /// Initialize a new ``KafkaConsumer``.
@@ -195,7 +182,7 @@ public final class KafkaConsumer: Sendable, Service {
             delegate: KafkaConsumerCloseOnTerminate(isMessageSequence: true, stateMachine: self.stateMachine)
         )
 
-        self.messages = KafkaConsumerMessages(
+        self.messages = KafkaBulkConsumerMessages(
             stateMachine: self.stateMachine,
             wrappedSequence: sourceAndSequence.sequence
         )
