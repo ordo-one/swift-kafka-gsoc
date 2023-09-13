@@ -245,7 +245,7 @@ final class RDKafkaClient: Sendable {
 //                        msgs.append(.init(topicPartitionPointer: topicPartition))
                     }
                 } else {
-                    events.append(.error(result: KafkaError.rdKafkaError(wrapping: err)))
+//                    events.append(.error(result: KafkaError.rdKafkaError(wrapping: err)))
                 }
                 break
             case .none:
