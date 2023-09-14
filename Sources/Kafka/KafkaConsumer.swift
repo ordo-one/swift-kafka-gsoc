@@ -97,6 +97,9 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
                         self.deallocateIterator()
                         throw error
                     }
+                case .terminateConsumerSequence:
+                    self.deallocateIterator()
+                    return nil
                 }
                 if element.eof {
                     continue
@@ -732,6 +735,9 @@ extension KafkaConsumer {
             /// Store the message offset with the given `client`.
             /// - Parameter client: Client used for handling the connection to the Kafka cluster.
             case storeOffset(client: RDKafkaClient)
+            /// The consumer is in the process of `.finishing` or even `.finished`.
+            /// Stop yielding new elements and terminate the asynchronous sequence.
+            case terminateConsumerSequence
         }
 
         /// Get action to take when wanting to store a message offset (to be auto-committed by `librdkafka`).
@@ -745,10 +751,8 @@ extension KafkaConsumer {
                 fatalError("Cannot store offset when consumption has been stopped")
             case .consuming(let client, _, _):
                 return .storeOffset(client: client)
-            case .finishing(let client):
-                return .storeOffset(client: client)
-            case .finished:
-                fatalError("\(#function) invoked while still in state \(self.state)")
+            case .finishing, .finished:
+                return .terminateConsumerSequence
             }
         }
 
