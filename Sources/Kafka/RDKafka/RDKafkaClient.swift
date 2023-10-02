@@ -310,8 +310,8 @@ public final class RDKafkaClient: Sendable {
     /// Swift wrapper for events from `librdkafka`'s event queue.
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
-        case consumerMessages(results: [KafkaConsumerMessage])
-        case error(result: Error)
+        case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
+        case error(Error)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -320,11 +320,6 @@ public final class RDKafkaClient: Sendable {
     func eventPoll(maxEvents: Int = 100, consumer: Bool = false) -> [KafkaEvent] {
         var events = [KafkaEvent]()
         events.reserveCapacity(maxEvents)
-
-        var msgs = [KafkaConsumerMessage]()
-        if consumer {
-            msgs.reserveCapacity(maxEvents)
-        }
 
         for _ in 0..<maxEvents {
             let event = rd_kafka_queue_poll(self.queue, 0)
@@ -340,34 +335,19 @@ public final class RDKafkaClient: Sendable {
                 let forwardEvent = self.handleDeliveryReportEvent(event)
                 events.append(forwardEvent)
             case .fetch:
-                do {
-                    if let msg = try self.handleFetchEvent(event) {
-                        msgs.append(msg)
-                    }
-                } catch {
-                    if !msgs.isEmpty {
-                        events.append(.consumerMessages(results: msgs))
-                        msgs.removeAll(keepingCapacity: true)
-                    }
-                    events.append(.error(result: error))
+                if let event = try self.handleFetchEvent(event) {
+                    events.append(event)
                 }
             case .log:
                 self.handleLogEvent(event)
             case .offsetCommit:
                 self.handleOffsetCommitEvent(event)
             case .none:
-                if !msgs.isEmpty {
-                    events.append(.consumerMessages(results: msgs))
-                }
                 // Finished reading events, return early
                 return events
             default:
                 break // Ignored Event
             }
-        }
-        
-        if !msgs.isEmpty {
-           events.append(.consumerMessages(results: msgs))
         }
 
         return events
@@ -397,20 +377,19 @@ public final class RDKafkaClient: Sendable {
     ///
     /// - Parameter event: Pointer to underlying `rd_kafka_event_t`.
     /// - Returns: `KafkaEvent` to be returned as part of ``KafkaClient.eventPoll()`.
-    private func handleFetchEvent(_ event: OpaquePointer?) throws -> KafkaConsumerMessage? {
-        //do {
+    private func handleFetchEvent(_ event: OpaquePointer?) -> KafkaEvent? {
+        do {
             // RD_KAFKA_EVENT_FETCH only returns a single message:
             // https://docs.confluent.io/platform/current/clients/librdkafka/html/rdkafka_8h.html#a3a855eb7bdf17f5797d4911362a5fc7c
             if let messagePointer = rd_kafka_event_message_next(event) {
-                return try KafkaConsumerMessage(messagePointer: messagePointer)
-                //let message = try KafkaConsumerMessage(messagePointer: messagePointer)
-                //return .consumerMessages(result: .success(message))
+                let message = try KafkaConsumerMessage(messagePointer: messagePointer)
+                return .consumerMessages(result: .success(message))
             } else {
                 return nil
             }
-        //} catch {
-        //    return .consumerMessages(result: .failure(error))
-        //}
+        } catch {
+            return .consumerMessages(result: .failure(error))
+        }
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
     }
 

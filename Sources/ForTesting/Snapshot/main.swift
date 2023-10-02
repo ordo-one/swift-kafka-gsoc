@@ -119,6 +119,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     await serviceGroup1.triggerGracefulShutdown()
 }
 
+#if false
 do {
 print("bulk messages")
 // MARK: Consumer
@@ -209,6 +210,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     await serviceGroup2.triggerGracefulShutdown()
 }
 }
+#endif
 do {
 print("single messages")
 // MARK: Consumer
