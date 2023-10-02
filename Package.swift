@@ -104,5 +104,12 @@ let package = Package(
             name: "IntegrationTests",
             dependencies: ["Kafka"]
         ),
+        .executableTarget(
+            name: "Snapshot",
+            dependencies: [
+                "Kafka"
+            ],
+            path: "Sources/ForTesting/Snapshot"
+        ),
     ]
 )

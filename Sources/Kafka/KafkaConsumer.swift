@@ -58,16 +58,13 @@ public struct KafkaConsumerEvents: Sendable, AsyncSequence {
     }
 }
 
-// MARK: - KafkaConsumerMessages
-
-/// `AsyncSequence` implementation for handling messages received from the Kafka cluster (``KafkaConsumerMessage``).
-public struct KafkaConsumerMessages: Sendable, AsyncSequence {
+public struct BulkConsumerMessages: Sendable, AsyncSequence {
     let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
 
-    public typealias Element = KafkaConsumerMessage
+    public typealias Element = [KafkaConsumerMessage]
     typealias BackPressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure
     typealias WrappedSequence = NIOThrowingAsyncSequenceProducer<
-        Result<KafkaConsumerMessage, Error>,
+        Result<[KafkaConsumerMessage], Error>,
         Error,
         BackPressureStrategy,
         KafkaConsumerCloseOnTerminate
@@ -81,6 +78,87 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
 
         public mutating func next() async throws -> Element? {
             guard let result = try await self.wrappedIterator?.next() else {
+                self.deallocateIterator()
+                return nil
+            }
+
+            switch result {
+            case .success(let messages):
+                for message in messages {
+                    let action = self.stateMachine.withLockedValue { $0.storeOffset() }
+                    switch action {
+                    case .storeOffset(let client):
+                        do {
+                            try client.storeMessageOffset(message)
+                        } catch {
+                            self.deallocateIterator()
+                            throw error
+                        }
+                    case .terminateConsumerSequence:
+                        self.deallocateIterator()
+                        return nil
+                    }
+                }
+                return messages
+            case .failure(let error):
+                self.deallocateIterator()
+                throw error
+            }
+        }
+
+        private mutating func deallocateIterator() {
+            self.wrappedIterator = nil
+        }
+    }
+
+    public func makeAsyncIterator() -> AsyncIterator {
+        return AsyncIterator(
+            stateMachine: self.stateMachine,
+            wrappedIterator: self.wrappedSequence.makeAsyncIterator()
+        )
+    }
+}
+// MARK: - KafkaConsumerMessages
+
+/// `AsyncSequence` implementation for handling messages received from the Kafka cluster (``KafkaConsumerMessage``).
+public struct KafkaConsumerMessages: Sendable, AsyncSequence {
+    let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
+
+    public typealias Element = KafkaConsumerMessage
+    typealias BackPressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure
+    typealias WrappedSequence = NIOThrowingAsyncSequenceProducer<
+        Result<[KafkaConsumerMessage], Error>,
+        Error,
+        BackPressureStrategy,
+        KafkaConsumerCloseOnTerminate
+    >
+    let wrappedSequence: WrappedSequence
+
+    /// `AsynceIteratorProtocol` implementation for handling messages received from the Kafka cluster (``KafkaConsumerMessage``).
+    public struct AsyncIterator: AsyncIteratorProtocol {
+        let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
+        var wrappedIterator: WrappedSequence.AsyncIterator?
+        var lastArray: [KafkaConsumerMessage] = []
+        var idx = 0
+        
+        private mutating func nextElement() async throws -> Result<Element, Error>? {
+            if idx < lastArray.count {
+                let element = lastArray[idx]
+                idx += 1
+                return .success(element)
+            }
+            guard let result = try await self.wrappedIterator?.next() else {
+                self.deallocateIterator()
+                return nil
+            }
+
+            lastArray = try result.get()
+            idx = 0
+            return try await self.nextElement()
+        }
+
+        public mutating func next() async throws -> Element? {
+            guard let result = try await self.nextElement() else {
                 self.deallocateIterator()
                 return nil
             }
@@ -125,7 +203,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
 /// A ``KafkaConsumer `` can be used to consume messages from a Kafka cluster.
 public final class KafkaConsumer: Sendable, Service {
     typealias Producer = NIOThrowingAsyncSequenceProducer<
-        Result<KafkaConsumerMessage, Error>,
+        Result<[KafkaConsumerMessage], Error>,
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
         KafkaConsumerCloseOnTerminate
@@ -139,6 +217,9 @@ public final class KafkaConsumer: Sendable, Service {
 
     /// An asynchronous sequence containing messages from the Kafka cluster.
     public let messages: KafkaConsumerMessages
+    public var bulkMessages: BulkConsumerMessages {
+        .init(stateMachine: messages.stateMachine, wrappedSequence: messages.wrappedSequence)
+    }
 
     // Private initializer, use factory method or convenience init to create KafkaConsumer
     /// Initialize a new ``KafkaConsumer``.
@@ -162,7 +243,7 @@ public final class KafkaConsumer: Sendable, Service {
         self.logger = logger
 
         let sourceAndSequence = NIOThrowingAsyncSequenceProducer.makeSequence(
-            elementType: Result<KafkaConsumerMessage, Error>.self,
+            elementType: Result<[KafkaConsumerMessage], Error>.self,
             backPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure(),
             delegate: KafkaConsumerCloseOnTerminate(stateMachine: self.stateMachine)
         )
@@ -340,7 +421,9 @@ public final class KafkaConsumer: Sendable, Service {
                     switch event {
                     case .consumerMessages(let result):
                         // We do not support back pressure, we can ignore the yield result
-                        _ = source.yield(result)
+                        _ = source.yield(.success(result))
+                    case .error(let err):
+                        _ = source.yield(.failure(err))
                     default:
                         break // Ignore
                     }

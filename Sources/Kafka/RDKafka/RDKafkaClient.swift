@@ -18,12 +18,12 @@ import Logging
 
 /// Base class for ``KafkaProducer`` and ``KafkaConsumer``,
 /// which is used to handle the connection to the Kafka ecosystem.
-final class RDKafkaClient: Sendable {
+public final class RDKafkaClient: Sendable {
     // Default size for Strings returned from C API
-    static let stringSize = 1024
+    public static let stringSize = 1024
 
     /// Determines if client is a producer or a consumer.
-    enum ClientType {
+    public enum ClientType {
         case producer
         case consumer
     }
@@ -71,7 +71,7 @@ final class RDKafkaClient: Sendable {
     }
 
     /// Factory method creating a new instance of a ``RDKafkaClient``.
-    static func makeClient(
+    public static func makeClient(
         type: ClientType,
         configDictionary: [String: String],
         events: [RDKafkaEvent],
@@ -310,15 +310,21 @@ final class RDKafkaClient: Sendable {
     /// Swift wrapper for events from `librdkafka`'s event queue.
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
-        case consumerMessages(result: Result<KafkaConsumerMessage, Error>)
+        case consumerMessages(results: [KafkaConsumerMessage])
+        case error(result: Error)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
     ///
     /// - Parameter maxEvents:Maximum number of events to serve in one invocation.
-    func eventPoll(maxEvents: Int = 100) -> [KafkaEvent] {
+    func eventPoll(maxEvents: Int = 100, consumer: Bool = false) -> [KafkaEvent] {
         var events = [KafkaEvent]()
         events.reserveCapacity(maxEvents)
+
+        var msgs = [KafkaConsumerMessage]()
+        if consumer {
+            msgs.reserveCapacity(maxEvents)
+        }
 
         for _ in 0..<maxEvents {
             let event = rd_kafka_queue_poll(self.queue, 0)
@@ -334,19 +340,34 @@ final class RDKafkaClient: Sendable {
                 let forwardEvent = self.handleDeliveryReportEvent(event)
                 events.append(forwardEvent)
             case .fetch:
-                if let forwardEvent = self.handleFetchEvent(event) {
-                    events.append(forwardEvent)
+                do {
+                    if let msg = try self.handleFetchEvent(event) {
+                        msgs.append(msg)
+                    }
+                } catch {
+                    if !msgs.isEmpty {
+                        events.append(.consumerMessages(results: msgs))
+                        msgs.removeAll(keepingCapacity: true)
+                    }
+                    events.append(.error(result: error))
                 }
             case .log:
                 self.handleLogEvent(event)
             case .offsetCommit:
                 self.handleOffsetCommitEvent(event)
             case .none:
+                if !msgs.isEmpty {
+                    events.append(.consumerMessages(results: msgs))
+                }
                 // Finished reading events, return early
                 return events
             default:
                 break // Ignored Event
             }
+        }
+        
+        if !msgs.isEmpty {
+           events.append(.consumerMessages(results: msgs))
         }
 
         return events
@@ -376,19 +397,20 @@ final class RDKafkaClient: Sendable {
     ///
     /// - Parameter event: Pointer to underlying `rd_kafka_event_t`.
     /// - Returns: `KafkaEvent` to be returned as part of ``KafkaClient.eventPoll()`.
-    private func handleFetchEvent(_ event: OpaquePointer?) -> KafkaEvent? {
-        do {
+    private func handleFetchEvent(_ event: OpaquePointer?) throws -> KafkaConsumerMessage? {
+        //do {
             // RD_KAFKA_EVENT_FETCH only returns a single message:
             // https://docs.confluent.io/platform/current/clients/librdkafka/html/rdkafka_8h.html#a3a855eb7bdf17f5797d4911362a5fc7c
             if let messagePointer = rd_kafka_event_message_next(event) {
-                let message = try KafkaConsumerMessage(messagePointer: messagePointer)
-                return .consumerMessages(result: .success(message))
+                return try KafkaConsumerMessage(messagePointer: messagePointer)
+                //let message = try KafkaConsumerMessage(messagePointer: messagePointer)
+                //return .consumerMessages(result: .success(message))
             } else {
                 return nil
             }
-        } catch {
-            return .consumerMessages(result: .failure(error))
-        }
+        //} catch {
+        //    return .consumerMessages(result: .failure(error))
+        //}
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
     }
 
@@ -646,7 +668,7 @@ final class RDKafkaClient: Sendable {
     /// - Warning: Do not escape the pointer from the closure for later use.
     /// - Parameter body: The closure will use the Kafka handle pointer.
     @discardableResult
-    func withKafkaHandlePointer<T>(_ body: (OpaquePointer) throws -> T) rethrows -> T {
+    public func withKafkaHandlePointer<T>(_ body: (OpaquePointer) throws -> T) rethrows -> T {
         return try body(self.kafkaHandle)
     }
 }

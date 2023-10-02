@@ -25,6 +25,8 @@ public enum KafkaProducerEvent: Sendable, Hashable {
             self = .deliveryReports(results)
         case .consumerMessages:
             fatalError("Cannot cast \(event) to KafkaProducerEvent")
+        case .error:
+            fatalError("Cannot cast \(event) to KafkaProducerEvent")
         }
     }
 }

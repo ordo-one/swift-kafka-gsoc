@@ -55,7 +55,7 @@ public struct KafkaError: Error, CustomStringConvertible, @unchecked Sendable {
         }
     }
 
-    static func rdKafkaError(
+    public static func rdKafkaError(
         wrapping error: rd_kafka_resp_err_t, file: String = #fileID, line: UInt = #line
     ) -> KafkaError {
         let errorMessage = String(cString: rd_kafka_err2str(error))
@@ -116,7 +116,7 @@ public struct KafkaError: Error, CustomStringConvertible, @unchecked Sendable {
         )
     }
 
-    static func topicCreation(
+    public static func topicCreation(
         reason: String, file: String = #fileID, line: UInt = #line
     ) -> KafkaError {
         return KafkaError(
@@ -126,7 +126,7 @@ public struct KafkaError: Error, CustomStringConvertible, @unchecked Sendable {
         )
     }
 
-    static func topicDeletion(
+    public static func topicDeletion(
         reason: String, file: String = #fileID, line: UInt = #line
     ) -> KafkaError {
         return KafkaError(
