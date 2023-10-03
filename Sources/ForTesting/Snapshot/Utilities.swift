@@ -50,7 +50,7 @@ extension RDKafkaClient {
 
         guard let newTopic = rd_kafka_NewTopic_new(
             uniqueTopicName,
-            -1, // use default num_partitions
+            6, // use default num_partitions
             -1, // use default replication_factor
             errorChars,
             RDKafkaClient.stringSize
