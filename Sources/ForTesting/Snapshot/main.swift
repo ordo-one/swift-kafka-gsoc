@@ -10,7 +10,17 @@ func sendAndAcknowledgeMessages(
     messages: [KafkaProducerMessage<String, String>]
 ) async throws {
     for message in messages {
-        try producer.send(message)
+        while true { // Note: this is an example of queue full
+            do {
+                try producer.send(message)
+                break
+            } catch let error as KafkaError where error.description.contains("Queue full") {
+                continue
+            } catch {
+                print("Caught some error: \(error)")
+                throw error
+            }
+        }
     }
 
     var receivedDeliveryReportsCtr = 0
@@ -45,7 +55,7 @@ func createTestMessages(
         KafkaProducerMessage(
             topic: topic,
             headers: headers,
-            key: "key",
+            key: "key \($0)",
             value: "Hello, World! \($0) - \(Date().description)"
         )
     }
@@ -81,7 +91,7 @@ let client = try RDKafkaClient.makeClient(
         )
 uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
 
-let numOfMessages: UInt = 100_000
+let numOfMessages: UInt = 1_000_000
 let testMessages = createTestMessages(topic: uniqueTestTopic, count: numOfMessages)
 let firstConsumerOffset = testMessages.count / 2
 let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: producerConfig, logger: logger)
@@ -137,6 +147,7 @@ var consumer2Config = KafkaConsumerConfiguration(
 )
 consumer2Config.autoOffsetReset = .beginning
 consumer2Config.broker.addressFamily = .v4
+consumer2Config.pollInterval = .milliseconds(1)
 
 let consumer2 = try KafkaConsumer(
     configuration: consumer2Config,
@@ -227,6 +238,7 @@ var consumer2Config = KafkaConsumerConfiguration(
 )
 consumer2Config.autoOffsetReset = .beginning
 consumer2Config.broker.addressFamily = .v4
+consumer2Config.pollInterval = .milliseconds(1)
 
 let consumer2 = try KafkaConsumer(
     configuration: consumer2Config,
