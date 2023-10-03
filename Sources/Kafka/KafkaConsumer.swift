@@ -416,7 +416,7 @@ public final class KafkaConsumer: Sendable, Service {
             let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
             switch nextAction {
             case .pollForAndYieldMessage(let client, let source):
-                let events = client.eventPoll()
+                let events = client.eventPoll(consumer: true)
                 for event in events {
                     switch event {
                     case .consumerMessages(let result):

@@ -24,8 +24,7 @@ func sendAndAcknowledgeMessages(
     }
 
     var receivedDeliveryReportsCtr = 0
-
-    let printInt = Swift.max(messages.count / 20, 1)
+    var prevPercent = 0
 
     for await event in events {
         switch event {
@@ -35,8 +34,10 @@ func sendAndAcknowledgeMessages(
             break // Ignore any other events
         }
 
-        if receivedDeliveryReportsCtr % printInt == 0 {
-            print("Delivered \(receivedDeliveryReportsCtr * 100 / messages.count)% of messages")
+        let curPercent = receivedDeliveryReportsCtr * 100 / messages.count
+        if curPercent >= prevPercent + 10 || curPercent == 100 {
+            print("Delivered \(curPercent)% of messages")
+            prevPercent = curPercent
         }
 
         if receivedDeliveryReportsCtr >= messages.count {
@@ -91,7 +92,7 @@ let client = try RDKafkaClient.makeClient(
         )
 uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
 
-let numOfMessages: UInt = 1_000_000
+let numOfMessages: UInt = 15_000_000
 let testMessages = createTestMessages(topic: uniqueTestTopic, count: numOfMessages)
 let firstConsumerOffset = testMessages.count / 2
 let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: producerConfig, logger: logger)
@@ -147,7 +148,7 @@ var consumer2Config = KafkaConsumerConfiguration(
 )
 consumer2Config.autoOffsetReset = .beginning
 consumer2Config.broker.addressFamily = .v4
-consumer2Config.pollInterval = .milliseconds(1)
+consumer2Config.pollInterval = .zero
 
 let consumer2 = try KafkaConsumer(
     configuration: consumer2Config,
@@ -221,7 +222,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
 }
 }
 do {
-print("single messages")
+print("single messages adapter")
 // MARK: Consumer
 
 // The first consumer has now read the first half of the messages in the test topic.
@@ -238,7 +239,7 @@ var consumer2Config = KafkaConsumerConfiguration(
 )
 consumer2Config.autoOffsetReset = .beginning
 consumer2Config.broker.addressFamily = .v4
-consumer2Config.pollInterval = .milliseconds(1)
+consumer2Config.pollInterval = .zero
 
 let consumer2 = try KafkaConsumer(
     configuration: consumer2Config,
