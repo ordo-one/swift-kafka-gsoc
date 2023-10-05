@@ -254,7 +254,7 @@ public final class KafkaProducer: Service, Sendable {
 
     private func _run() async throws {
         var events = [RDKafkaClient.KafkaEvent]()
-        var maxEvents = 100
+        let maxEvents = 100
         var pollInterval = self.configuration.pollInterval
         while !Task.isCancelled {
             let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
@@ -262,9 +262,9 @@ public final class KafkaProducer: Service, Sendable {
             case .pollWithoutYield(let client):
                 // Drop any incoming events
 //                let _ = client.eventPoll()
-                _ = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                _ = client.eventPoll(events: &events, maxEvents: maxEvents)
             case .pollAndYield(let client, let source):
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents)
                 for event in events {
                     switch event {
                     case .deliveryReport(let reports):

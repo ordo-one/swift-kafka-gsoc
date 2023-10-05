@@ -80,16 +80,15 @@ public struct KafkaConsumerEvents: Sendable, AsyncSequence {
 // MARK: - KafkaConsumerMessages
 
 /// `AsyncSequence` implementation for handling messages received from the Kafka cluster (``KafkaConsumerMessage``).
-public struct KafkaConsumerMessages: Sendable, AsyncSequence {
+public struct KafkaBulkConsumerMessages: Sendable, AsyncSequence {
     let stateMachine: NIOLockedValueBox<KafkaConsumer.StateMachine>
 
-    public typealias Element = KafkaConsumerMessage
-//    typealias BackPressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure
+    public typealias Element = [KafkaConsumerMessage]
+
     typealias WrappedSequence = NIOThrowingAsyncSequenceProducer<
         Element,
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
-//        NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
         KafkaConsumerCloseOnTerminate
     >
     let wrappedSequence: WrappedSequence
@@ -100,30 +99,32 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
         var wrappedIterator: WrappedSequence.AsyncIterator?
 
         public mutating func next() async throws -> Element? {
-            repeat {
-                guard let element = try await self.wrappedIterator?.next() else {
-                    self.deallocateIterator()
+            while true {
+                guard let bulk = try await self.wrappedIterator?.next() else {
                     return nil
+                }
+
+                for element in bulk { // should we really do that?
+                    let action = self.stateMachine.withLockedValue { $0.storeOffset() }
+                    switch action {
+                    case .storeOffset(let client):
+                        do {
+                            try client.storeMessageOffset(element)
+                        } catch {
+                            self.deallocateIterator()
+                            throw error
+                        }
+                        case .terminateConsumerSequence:
+                            self.deallocateIterator()
+                            return nil
+                    }
                 }
                 
-                let action = self.stateMachine.withLockedValue { $0.storeOffset() }
-                switch action {
-                case .storeOffset(let client):
-                    do {
-                        try client.storeMessageOffset(element)
-                    } catch {
-                        self.deallocateIterator()
-                        throw error
-                    }
-                case .terminateConsumerSequence:
-                    self.deallocateIterator()
-                    return nil
-                }
-                if element.eof {
+                if bulk.last?.eof ?? false { // eof is always separate bulk
                     continue
                 }
-                return element
-            } while true
+                return bulk
+            }
         }
 
         private mutating func deallocateIterator() {
@@ -144,7 +145,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
 /// A ``KafkaConsumer `` can be used to consume messages from a Kafka cluster.
 public final class KafkaConsumer: Sendable, Service {
     typealias Producer = NIOThrowingAsyncSequenceProducer<
-        KafkaConsumerMessage,
+        [KafkaConsumerMessage],
         Error,
         NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
 //        NIOAsyncSequenceProducerBackPressureStrategies.NoBackPressure,
@@ -167,7 +168,8 @@ public final class KafkaConsumer: Sendable, Service {
     private let resumeProducingContinuation: AsyncStream<ResumeOrigin>.Continuation
 
     /// An asynchronous sequence containing messages from the Kafka cluster.
-    public let messages: KafkaConsumerMessages
+    public let messages: KafkaBulkConsumerMessages
+    
 
     // Private initializer, use factory method or convenience init to create KafkaConsumer
     /// Initialize a new ``KafkaConsumer``.
@@ -194,12 +196,12 @@ public final class KafkaConsumer: Sendable, Service {
         
         (self.resumeProducingStream, self.resumeProducingContinuation) = AsyncStream<ResumeOrigin>.makeStream()
         let sourceAndSequence = NIOThrowingAsyncSequenceProducer.makeSequence(
-            elementType: KafkaConsumerMessage.self,
-            backPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark(lowWatermark: 512, highWatermark: 1024),
+            elementType: [KafkaConsumerMessage].self,
+            backPressureStrategy: NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark(lowWatermark: configuration.lowWaterMark, highWatermark: configuration.highWaterMark),
             delegate: KafkaConsumerCloseOnTerminate(logger: logger, isMessageSequence: true, stateMachine: self.stateMachine, produceResumingContinuation: self.resumeProducingContinuation)
         )
 
-        self.messages = KafkaConsumerMessages(
+        self.messages = KafkaBulkConsumerMessages(
             stateMachine: self.stateMachine,
             wrappedSequence: sourceAndSequence.sequence
         )
@@ -439,7 +441,7 @@ public final class KafkaConsumer: Sendable, Service {
 
     private func _run() async throws {
         var events = [RDKafkaClient.KafkaEvent]()
-        var maxEvents = 100
+        let maxEvents = configuration.eventsPerPoll
         var pollInterval = self.configuration.pollInterval
         var producingEpoch = 0
         var backpressureResumeIterator = self.resumeProducingStream.makeAsyncIterator()
@@ -447,36 +449,34 @@ public final class KafkaConsumer: Sendable, Service {
             let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
             switch nextAction {
             case .pollForAndYieldMessage(let client, let source, let eventSource):
+
                 var ignoreStopProducing = false
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumer: true)
                 let pollTime = ContinuousClock.now
+
                 for event in events {
                     switch event {
-                    case .consumerMessages(let result):
+                    case .consumerMessages(let results):
+                        let result = source.yield(results)
                         switch result {
-                        case .success(let message):
-                            // We do not support back pressure, we can ignore the yield result
-                            let result = source.yield(message)
-                            switch result {
-                            case .stopProducing:
-                                if ignoreStopProducing {
-                                    break
-                                }
-                                let resumeOrigin = await waitForBackpressue(epoch: producingEpoch, backpressureResumeIterator: &backpressureResumeIterator, allowedTimeToWait: (.now - pollTime) + (self.configuration.maximumPollInterval - .milliseconds(100)))
-                                if case .timer = resumeOrigin {
-                                    ignoreStopProducing = true // we have to do next poll
-                                }
-                                producingEpoch += 1
-                            case .produceMore:
+                        case .stopProducing:
+                            if ignoreStopProducing {
                                 break
-                            case .dropped:
-                                break // ignore, sequence terminated
                             }
-                        case .failure(let error):
-                            source.finish()
-                            eventSource?.finish()
-                            throw error
+                            let resumeOrigin = await waitForBackpressue(epoch: producingEpoch, backpressureResumeIterator: &backpressureResumeIterator, allowedTimeToWait: (.now - pollTime) + (self.configuration.maximumPollInterval - .milliseconds(100)))
+                            if case .timer = resumeOrigin {
+                                ignoreStopProducing = true // we have to do next poll
+                            }
+                            producingEpoch += 1
+                        case .produceMore:
+                            break
+                        case .dropped:
+                            break // ignore, sequence terminated
                         }
+                    case .error(let error):
+                        source.finish()
+                        eventSource?.finish()
+                        throw error
                     case .statistics(let statistics):
                         _ = eventSource?.yield(.statistics(statistics))
                     case .rebalance(let rebalance):
@@ -486,13 +486,12 @@ public final class KafkaConsumer: Sendable, Service {
                         break // Ignore
                     }
                 }
+
                 logger.debug("Processed \(events.count) shouldSleep: \(shouldSleep), pollInterval: \(pollInterval), maxEvents: \(maxEvents), ignoreStopProducing: \(ignoreStopProducing)")
                 if shouldSleep {
-                    maxEvents = min(100, maxEvents * 2)
                     pollInterval = min(self.configuration.pollInterval, pollInterval * 2)
                     try await Task.sleep(for: pollInterval)
                 } else {
-                    maxEvents = min(100, maxEvents * 2)
                     pollInterval = max(pollInterval / 3, .microseconds(1))
                     await Task.yield()
                 }
@@ -501,7 +500,7 @@ public final class KafkaConsumer: Sendable, Service {
                 // We are just polling to serve any remaining events queued inside of `librdkafka`.
                 // All remaining queued consumer messages will get dropped and not be committed (marked as read).
                 //let events =
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: &maxEvents)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumer: true)
                 for event in events {
                     switch event {
                     case .rebalance(let type):
@@ -822,6 +821,8 @@ extension KafkaConsumer {
             /// Store the message offset with the given `client`.
             /// - Parameter client: Client used for handling the connection to the Kafka cluster.
             case storeOffset(client: RDKafkaClient)
+            /// The consumer is in the process of `.finishing` or even `.finished`.
+            /// Stop yielding new elements and terminate the asynchronous sequence.
             case terminateConsumerSequence
         }
 

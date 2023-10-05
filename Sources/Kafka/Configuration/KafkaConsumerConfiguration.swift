@@ -223,6 +223,20 @@ public struct KafkaConsumerConfiguration {
     
     public var compression: String?
     
+    /// Max memory for queued messages
+    public var queuedMaxMessagesKbytes: Int = 1048576 // default 1048576
+    
+    
+    /// backpressure low watermark - number of batches
+    public var lowWaterMark = 512
+    /// backpressure high watermark - number of batches
+    public var highWaterMark = 1024
+    
+    /// number of events per poll
+    public var eventsPerPoll = 100
+    /// number of messages per poll
+    public var batchSize = 100
+    
     public init(
         consumptionStrategy: ConsumptionStrategy,
         bootstrapBrokerAddresses: [KafkaConfiguration.BrokerAddress]
@@ -282,7 +296,7 @@ extension KafkaConsumerConfiguration {
         resultDict["broker.address.family"] = broker.addressFamily.description
         resultDict["reconnect.backoff.ms"] = String(reconnect.backoff.rawValue)
         resultDict["reconnect.backoff.max.ms"] = String(reconnect.maximumBackoff.inMilliseconds)
-        resultDict["queued.max.messages.kbytes"] = String(8 * 1024) // XX MB per partition // TODO: remove
+        resultDict["queued.max.messages.kbytes"] = String(queuedMaxMessagesKbytes)
         
         resultDict["statistics.interval.ms"] = String(statisticsInterval.rawValue)
         
