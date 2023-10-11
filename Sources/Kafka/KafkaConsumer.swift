@@ -451,7 +451,7 @@ public final class KafkaConsumer: Sendable, Service {
             case .pollForAndYieldMessage(let client, let source, let eventSource):
 
                 var ignoreStopProducing = false
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumer: true)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumerBatchSize: configuration.batchSize)
                 let pollTime = ContinuousClock.now
 
                 for event in events {
@@ -487,7 +487,7 @@ public final class KafkaConsumer: Sendable, Service {
                     }
                 }
 
-                logger.debug("Processed \(events.count) shouldSleep: \(shouldSleep), pollInterval: \(pollInterval), maxEvents: \(maxEvents), ignoreStopProducing: \(ignoreStopProducing)")
+                logger.trace("Processed \(events.count) shouldSleep: \(shouldSleep), pollInterval: \(pollInterval), maxEvents: \(maxEvents), ignoreStopProducing: \(ignoreStopProducing)")
                 if shouldSleep {
                     pollInterval = min(self.configuration.pollInterval, pollInterval * 2)
                     try await Task.sleep(for: pollInterval)
@@ -500,7 +500,7 @@ public final class KafkaConsumer: Sendable, Service {
                 // We are just polling to serve any remaining events queued inside of `librdkafka`.
                 // All remaining queued consumer messages will get dropped and not be committed (marked as read).
                 //let events =
-                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumer: true)
+                let shouldSleep = client.eventPoll(events: &events, maxEvents: maxEvents, consumerBatchSize: configuration.batchSize)
                 for event in events {
                     switch event {
                     case .rebalance(let type):

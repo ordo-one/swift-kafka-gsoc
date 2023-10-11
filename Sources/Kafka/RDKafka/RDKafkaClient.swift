@@ -184,13 +184,13 @@ final class RDKafkaClient: Sendable {
     /// Poll the event `rd_kafka_queue_t` for new events.
     ///
     /// - Parameter maxEvents:Maximum number of events to serve in one invocation.
-    func eventPoll(events: inout [KafkaEvent], maxEvents: Int, consumer: Bool = false) -> Bool /* -> [KafkaEvent] */{
+    func eventPoll(events: inout [KafkaEvent], maxEvents: Int, consumerBatchSize: Int = 0) -> Bool /* -> [KafkaEvent] */{
         events.removeAll(keepingCapacity: true)
         events.reserveCapacity(maxEvents)
 
         var msgs = [KafkaConsumerMessage]()
-        if consumer {
-            msgs.reserveCapacity(maxEvents)
+        if consumerBatchSize > 0 {
+            msgs.reserveCapacity(consumerBatchSize)
         }
 
         var eofs = [KafkaConsumerMessage]()
@@ -206,7 +206,7 @@ final class RDKafkaClient: Sendable {
         
         var shouldSleep = true
 
-        for _ in 0..<maxEvents {
+        while events.count < maxEvents {
             let event = rd_kafka_queue_poll(self.queue, 0)
             defer { rd_kafka_event_destroy(event) }
 
@@ -225,6 +225,10 @@ final class RDKafkaClient: Sendable {
                     if let msg = try self.handleFetchEvent(event) {
                         msgs.append(msg)
                         shouldSleep = false
+                    }
+                    if msgs.count >= consumerBatchSize {
+                        events.append(.consumerMessages(results: msgs))
+                        msgs.removeAll(keepingCapacity: true)
                     }
                 } catch {
                     events.append(.error(result: error))

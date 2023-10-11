@@ -233,9 +233,9 @@ public struct KafkaConsumerConfiguration {
     public var highWaterMark = 1024
     
     /// number of events per poll
-    public var eventsPerPoll = 100
+    public var eventsPerPoll = 1000
     /// number of messages per poll
-    public var batchSize = 100
+    public var batchSize = 1000
     
     public init(
         consumptionStrategy: ConsumptionStrategy,
