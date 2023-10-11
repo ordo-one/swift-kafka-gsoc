@@ -102,7 +102,6 @@ defer {
 print("Generating \(numOfMessages) messages")
 let testMessages = createTestMessages(topic: uniqueTestTopic, count: numOfMessages)
 print("Finish generating \(numOfMessages) messages")
-let firstConsumerOffset = testMessages.count / 2
 let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: producerConfig, logger: logger)
 
 

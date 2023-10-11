@@ -51,7 +51,7 @@ services:
     depends_on: [kafka, runtime-setup]
     environment:
       KAFKA_HOST: kafka
-      MESSAGES_NUMBER: 1000000
+      MESSAGES_NUMBER: 3000000
     command: >
       /bin/bash -xcl "
         swift build --build-tests $${SANITIZER_ARG-} && \
