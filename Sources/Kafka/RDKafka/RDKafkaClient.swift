@@ -353,7 +353,7 @@ public final class RDKafkaClient: Sendable {
         return events
     }
     
-    func eventPoll(_ closure: (UnsafePointer<rd_kafka_message_t>) -> ()) {
+    func eventPoll(_ closure: (UnsafePointer<rd_kafka_message_t>) throws -> ()) rethrows {
         while true {
             let event = rd_kafka_queue_poll(self.queue, 0)
             defer { rd_kafka_event_destroy(event) }
@@ -366,7 +366,7 @@ public final class RDKafkaClient: Sendable {
             switch eventType {
             case .fetch:
                 if let msg = self.exctractMessage(event) {
-                    closure(msg)
+                    try closure(msg)
                 }
             case .log:
                 self.handleLogEvent(event)

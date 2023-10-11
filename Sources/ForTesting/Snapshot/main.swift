@@ -4,6 +4,10 @@ import NIOCore
 import ServiceLifecycle
 import Logging
 
+enum ExitErr: Error {
+    case exit
+}
+
 func sendAndAcknowledgeMessages(
     producer: KafkaProducer,
     events: KafkaProducerEvents,
@@ -91,6 +95,10 @@ let client = try RDKafkaClient.makeClient(
         )
 uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
 
+defer {
+    try? client._deleteTopic(uniqueTestTopic, timeout: -1)
+}
+
 let numOfMessages: UInt = 15_000_000
 let testMessages = createTestMessages(topic: uniqueTestTopic, count: numOfMessages)
 let firstConsumerOffset = testMessages.count / 2
@@ -101,7 +109,7 @@ let serviceGroupConfiguration1 = ServiceGroupConfiguration(services: [producer],
 let serviceGroup1 = ServiceGroup(configuration: serviceGroupConfiguration1)
 
 try await withThrowingTaskGroup(of: Void.self) { group in
-    print("Start producing")
+    print("Start producing \(numOfMessages) messages")
     defer {
         print("Finish producing")
     }
@@ -130,7 +138,78 @@ try await withThrowingTaskGroup(of: Void.self) { group in
 }
 
 do {
-    print("pure librdkafka")
+    print("current swift-kafka implementation")
+    // MARK: Consumer
+
+    // The first consumer has now read the first half of the messages in the test topic.
+    // This means our second consumer should be able to read the second
+    // half of messages without any problems.
+
+    let uniqueGroupID = UUID().uuidString
+    var consumer2Config = KafkaConsumerConfiguration(
+        consumptionStrategy: .group(
+            id: uniqueGroupID,
+            topics: [uniqueTestTopic]
+        ),
+        bootstrapBrokerAddresses: [bootstrapBrokerAddress]
+    )
+    consumer2Config.autoOffsetReset = .beginning
+    consumer2Config.broker.addressFamily = .v4
+    consumer2Config.pollInterval = .milliseconds(1)
+
+    let consumer2 = try KafkaConsumer(
+        configuration: consumer2Config,
+        logger: logger
+    )
+
+    let serviceGroupConfiguration2 = ServiceGroupConfiguration(services: [consumer2], gracefulShutdownSignals: [.sigterm, .sigint], logger: logger)
+    let serviceGroup2 = ServiceGroup(configuration: serviceGroupConfiguration2)
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        print("Start consuming")
+        defer {
+            print("Finish consuming")
+        }
+        // Run Task
+        group.addTask {
+            try await serviceGroup2.run()
+        }
+
+        // Second Consumer Task
+        group.addTask {
+            var ctr: UInt64 = 0
+            var tmpCtr: UInt64 = 0
+            let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
+            let totalStartDate = Date.timeIntervalSinceReferenceDate
+            var totalBytes: UInt64 = 0
+            
+            for try await record in consumer2.messages {
+                ctr += 1
+                totalBytes += UInt64(record.value.readableBytes)
+            
+                tmpCtr += 1
+                if tmpCtr >= interval {
+                    print("read \(ctr * 100 / UInt64(numOfMessages))%")
+                    tmpCtr = 0
+                }
+                if ctr >= numOfMessages {
+                    break
+                }
+            }
+            let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+            let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+            print("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+        }
+
+        // Wait for second Consumer Task to complete
+        try await group.next()
+        // Shutdown the serviceGroup
+        await serviceGroup2.triggerGracefulShutdown()
+    }
+}
+
+do {
+    print("librdkafka pure msg")
     // MARK: Consumer
 
     // The first consumer has now read the first half of the messages in the test topic.
@@ -158,38 +237,23 @@ do {
     var tmpCtr: UInt64 = 0
     
     let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
-    
-    var startDate = Date.timeIntervalSinceReferenceDate
-    var bytes: UInt64 = 0
-    
     let totalStartDate = Date.timeIntervalSinceReferenceDate
     var totalBytes: UInt64 = 0
-    
-    try await consumer2.run { record in
+
+    try? await consumer2.runPure { record in
         ctr += 1
-        bytes += UInt64(record.pointee.len)
         totalBytes += UInt64(record.pointee.len)
-    
+        
         tmpCtr += 1
         if tmpCtr >= interval {
-            let timeInterval = Date.timeIntervalSinceReferenceDate - startDate
-            let rate = Int64(Double(tmpCtr) / timeInterval)
-            let rateMb = Double(bytes) / timeInterval / 1024
-    
-            let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-            let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-            
-            print("read up to \(record.pointee.offset) in partition \(record.pointee.partition), ctr: \(ctr), rate: \(rate) (\(Int(rateMb))KB/s), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
-    
+            print("read \(ctr * 100 / UInt64(numOfMessages))%")
             tmpCtr = 0
-            bytes = 0
-            startDate = Date.timeIntervalSinceReferenceDate
         }
         if ctr >= numOfMessages {
             let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
             let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
             print("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
-            exit(0)
+            throw ExitErr.exit
         }
     }
 }

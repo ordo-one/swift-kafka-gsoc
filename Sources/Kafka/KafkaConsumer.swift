@@ -184,7 +184,7 @@ public final class KafkaConsumer: Sendable, Service {
         try client.pollSetConsumer()
     }
     
-    public func run(_ closure: (UnsafePointer<rd_kafka_message_t>) -> ()) async throws {
+    public func runPure(_ closure: (UnsafePointer<rd_kafka_message_t>) throws -> ()) async throws {
         switch self.configuration.consumptionStrategy._internal {
         case .partition(topic: let topic, partition: let partition, offset: let offset):
             try self.assign(topic: topic, partition: partition, offset: offset)
@@ -195,13 +195,13 @@ public final class KafkaConsumer: Sendable, Service {
             let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
             switch nextAction {
             case .pollForAndYieldMessage(let client, _):
-                client.eventPoll(closure)
+                try client.eventPoll(closure)
                 try await Task.sleep(for: self.configuration.pollInterval)
             case .pollWithoutYield(let client):
                 // Ignore poll result.
                 // We are just polling to serve any remaining events queued inside of `librdkafka`.
                 // All remaining queued consumer messages will get dropped and not be committed (marked as read).
-                client.eventPoll(closure)
+                try client.eventPoll(closure)
                 try await Task.sleep(for: self.configuration.pollInterval)
             case .terminatePollLoop:
                 return
