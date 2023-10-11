@@ -335,7 +335,7 @@ public final class RDKafkaClient: Sendable {
                 let forwardEvent = self.handleDeliveryReportEvent(event)
                 events.append(forwardEvent)
             case .fetch:
-                if let event = try self.handleFetchEvent(event) {
+                if let event = self.handleFetchEvent(event) {
                     events.append(event)
                 }
             case .log:
@@ -351,6 +351,34 @@ public final class RDKafkaClient: Sendable {
         }
 
         return events
+    }
+    
+    func eventPoll(_ closure: (UnsafePointer<rd_kafka_message_t>) -> ()) {
+        while true {
+            let event = rd_kafka_queue_poll(self.queue, 0)
+            defer { rd_kafka_event_destroy(event) }
+
+            let rdEventType = rd_kafka_event_type(event)
+            guard let eventType = RDKafkaEvent(rawValue: rdEventType) else {
+                fatalError("Unsupported event type: \(rdEventType)")
+            }
+
+            switch eventType {
+            case .fetch:
+                if let msg = self.exctractMessage(event) {
+                    closure(msg)
+                }
+            case .log:
+                self.handleLogEvent(event)
+            case .offsetCommit:
+                self.handleOffsetCommitEvent(event)
+            case .none:
+                // Finished reading events, return early
+                return
+            default:
+                break // Ignored Event
+            }
+        }
     }
 
     /// Handle event of type `RDKafkaEvent.deliveryReport`.
@@ -391,6 +419,13 @@ public final class RDKafkaClient: Sendable {
             return .consumerMessages(result: .failure(error))
         }
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
+    }
+    
+    private func exctractMessage(_ event: OpaquePointer?) -> UnsafePointer<rd_kafka_message_t>? {        if let messagePointer = rd_kafka_event_message_next(event) {
+            return messagePointer
+        } else {
+            return nil
+        }
     }
 
     /// Handle event of type `RDKafkaEvent.log`.

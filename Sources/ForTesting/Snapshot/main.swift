@@ -129,184 +129,67 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     await serviceGroup1.triggerGracefulShutdown()
 }
 
-#if false
 do {
-print("bulk messages")
-// MARK: Consumer
+    print("pure librdkafka")
+    // MARK: Consumer
 
-// The first consumer has now read the first half of the messages in the test topic.
-// This means our second consumer should be able to read the second
-// half of messages without any problems.
+    // The first consumer has now read the first half of the messages in the test topic.
+    // This means our second consumer should be able to read the second
+    // half of messages without any problems.
 
-let uniqueGroupID = UUID().uuidString
-var consumer2Config = KafkaConsumerConfiguration(
-    consumptionStrategy: .group(
-        id: uniqueGroupID,
-        topics: [uniqueTestTopic]
-    ),
-    bootstrapBrokerAddresses: [bootstrapBrokerAddress]
-)
-consumer2Config.autoOffsetReset = .beginning
-consumer2Config.broker.addressFamily = .v4
-consumer2Config.pollInterval = .zero
+    let uniqueGroupID = UUID().uuidString
+    var consumer2Config = KafkaConsumerConfiguration(
+        consumptionStrategy: .group(
+            id: uniqueGroupID,
+            topics: [uniqueTestTopic]
+        ),
+        bootstrapBrokerAddresses: [bootstrapBrokerAddress]
+    )
+    consumer2Config.autoOffsetReset = .beginning
+    consumer2Config.broker.addressFamily = .v4
+    consumer2Config.pollInterval = .milliseconds(1)
 
-let consumer2 = try KafkaConsumer(
-    configuration: consumer2Config,
-    logger: logger
-)
-
-let serviceGroupConfiguration2 = ServiceGroupConfiguration(services: [consumer2], gracefulShutdownSignals: [.sigterm, .sigint], logger: logger)
-let serviceGroup2 = ServiceGroup(configuration: serviceGroupConfiguration2)
-
-try await withThrowingTaskGroup(of: Void.self) { group in
-    print("Start consuming")
-    defer {
-        print("Finish consuming")
-    }
-    // Run Task
-    group.addTask {
-        try await serviceGroup2.run()
-    }
-
-    // Second Consumer Task
-    group.addTask {
-        //var i = 0
-        var ctr: UInt64 = 0
-        var tmpCtr: UInt64 = 0
-        
-        let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
-        
-        var startDate = Date.timeIntervalSinceReferenceDate
-        var bytes: UInt64 = 0
-        
-        let totalStartDate = Date.timeIntervalSinceReferenceDate
-        var totalBytes: UInt64 = 0
-        
-        for try await records in consumer2.bulkMessages {
-            //i = record.offset.rawValue
-            ctr += UInt64(records.count)
-            tmpCtr += UInt64(records.count) 
-            for record in records {
-                bytes += UInt64(record.value.readableBytes)
-                totalBytes += UInt64(record.value.readableBytes)
-            }
-        
-            if tmpCtr >= interval {
-                let timeInterval = Date.timeIntervalSinceReferenceDate - startDate
-                let rate = Int64(Double(tmpCtr) / timeInterval)
-                let rateMb = Double(bytes) / timeInterval / 1024
-        
-                let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-                let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-                
-                print("read up to \(records.last!.offset.rawValue) in partition \(records.last!.partition.rawValue), ctr: \(ctr), rate: \(rate) (\(Int(rateMb))KB/s), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
-        
-                tmpCtr = 0
-                bytes = 0
-                startDate = Date.timeIntervalSinceReferenceDate
-            }
-            if ctr >= numOfMessages {
-                break
-            }
+    let consumer2 = try KafkaConsumer(
+        configuration: consumer2Config,
+        logger: logger
+    )
+    
+    var ctr: UInt64 = 0
+    var tmpCtr: UInt64 = 0
+    
+    let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
+    
+    var startDate = Date.timeIntervalSinceReferenceDate
+    var bytes: UInt64 = 0
+    
+    let totalStartDate = Date.timeIntervalSinceReferenceDate
+    var totalBytes: UInt64 = 0
+    
+    try await consumer2.run { record in
+        ctr += 1
+        bytes += UInt64(record.pointee.len)
+        totalBytes += UInt64(record.pointee.len)
+    
+        tmpCtr += 1
+        if tmpCtr >= interval {
+            let timeInterval = Date.timeIntervalSinceReferenceDate - startDate
+            let rate = Int64(Double(tmpCtr) / timeInterval)
+            let rateMb = Double(bytes) / timeInterval / 1024
+    
+            let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+            let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+            
+            print("read up to \(record.pointee.offset) in partition \(record.pointee.partition), ctr: \(ctr), rate: \(rate) (\(Int(rateMb))KB/s), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+    
+            tmpCtr = 0
+            bytes = 0
+            startDate = Date.timeIntervalSinceReferenceDate
         }
-        
-        let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-        let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-        print("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
-    }
-
-    // Wait for second Consumer Task to complete
-    try await group.next()
-    // Shutdown the serviceGroup
-    await serviceGroup2.triggerGracefulShutdown()
-}
-}
-#endif
-do {
-print("single messages")
-// MARK: Consumer
-
-// The first consumer has now read the first half of the messages in the test topic.
-// This means our second consumer should be able to read the second
-// half of messages without any problems.
-
-let uniqueGroupID = UUID().uuidString
-var consumer2Config = KafkaConsumerConfiguration(
-    consumptionStrategy: .group(
-        id: uniqueGroupID,
-        topics: [uniqueTestTopic]
-    ),
-    bootstrapBrokerAddresses: [bootstrapBrokerAddress]
-)
-consumer2Config.autoOffsetReset = .beginning
-consumer2Config.broker.addressFamily = .v4
-consumer2Config.pollInterval = .milliseconds(1)
-
-let consumer2 = try KafkaConsumer(
-    configuration: consumer2Config,
-    logger: logger
-)
-
-let serviceGroupConfiguration2 = ServiceGroupConfiguration(services: [consumer2], gracefulShutdownSignals: [.sigterm, .sigint], logger: logger)
-let serviceGroup2 = ServiceGroup(configuration: serviceGroupConfiguration2)
-
-try await withThrowingTaskGroup(of: Void.self) { group in
-    print("Start consuming")
-    defer {
-        print("Finish consuming")
-    }
-    // Run Task
-    group.addTask {
-        try await serviceGroup2.run()
-    }
-
-    // Second Consumer Task
-    group.addTask {
-        //var i = 0
-        var ctr: UInt64 = 0
-        var tmpCtr: UInt64 = 0
-        
-        let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
-        
-        var startDate = Date.timeIntervalSinceReferenceDate
-        var bytes: UInt64 = 0
-        
-        let totalStartDate = Date.timeIntervalSinceReferenceDate
-        var totalBytes: UInt64 = 0
-        
-        for try await record in consumer2.messages {
-            //i = record.offset.rawValue
-            ctr += 1
-            bytes += UInt64(record.value.readableBytes)
-            totalBytes += UInt64(record.value.readableBytes)
-        
-            tmpCtr += 1
-            if tmpCtr >= interval {
-                let timeInterval = Date.timeIntervalSinceReferenceDate - startDate
-                let rate = Int64(Double(tmpCtr) / timeInterval)
-                let rateMb = Double(bytes) / timeInterval / 1024
-        
-                let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-                let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-                
-                print("read up to \(record.offset.rawValue) in partition \(record.partition.rawValue), ctr: \(ctr), rate: \(rate) (\(Int(rateMb))KB/s), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
-        
-                tmpCtr = 0
-                bytes = 0
-                startDate = Date.timeIntervalSinceReferenceDate
-            }
-            if ctr >= numOfMessages {
-                break
-            }
+        if ctr >= numOfMessages {
+            let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+            let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+            print("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+            exit(0)
         }
-        let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-        let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-        print("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
     }
-
-    // Wait for second Consumer Task to complete
-    try await group.next()
-    // Shutdown the serviceGroup
-    await serviceGroup2.triggerGracefulShutdown()
-}
 }

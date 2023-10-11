@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Crdkafka
 import Logging
 import NIOConcurrencyHelpers
 import NIOCore
@@ -181,6 +182,31 @@ public final class KafkaConsumer: Sendable, Service {
 
         // Forward main queue events to the consumer queue.
         try client.pollSetConsumer()
+    }
+    
+    public func run(_ closure: (UnsafePointer<rd_kafka_message_t>) -> ()) async throws {
+        switch self.configuration.consumptionStrategy._internal {
+        case .partition(topic: let topic, partition: let partition, offset: let offset):
+            try self.assign(topic: topic, partition: partition, offset: offset)
+        case .group(groupID: _, topics: let topics):
+            try self.subscribe(topics: topics)
+        }
+        while !Task.isCancelled {
+            let nextAction = self.stateMachine.withLockedValue { $0.nextPollLoopAction() }
+            switch nextAction {
+            case .pollForAndYieldMessage(let client, _):
+                client.eventPoll(closure)
+                try await Task.sleep(for: self.configuration.pollInterval)
+            case .pollWithoutYield(let client):
+                // Ignore poll result.
+                // We are just polling to serve any remaining events queued inside of `librdkafka`.
+                // All remaining queued consumer messages will get dropped and not be committed (marked as read).
+                client.eventPoll(closure)
+                try await Task.sleep(for: self.configuration.pollInterval)
+            case .terminatePollLoop:
+                return
+            }
+        }
     }
 
     /// Initialize a new ``KafkaConsumer``.
@@ -541,8 +567,9 @@ extension KafkaConsumer {
             switch self.state {
             case .uninitialized:
                 fatalError("\(#function) invoked while still in state \(self.state)")
-            case .initializing:
-                fatalError("Subscribe to consumer group / assign to topic partition pair before reading messages")
+            case .initializing(let client, let source): // TODO: for test only
+                return .pollForAndYieldMessage(client: client, source: source)
+//                fatalError("Subscribe to consumer group / assign to topic partition pair before reading messages")
             case .consuming(let client, let source):
                 return .pollForAndYieldMessage(client: client, source: source)
             case .consumptionStopped(let client):
