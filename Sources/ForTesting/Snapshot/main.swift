@@ -69,6 +69,7 @@ var logger = Logger(label: "snapshot")
 logger.logLevel = .info // .debug
 let kafkaHost: String = ProcessInfo.processInfo.environment["KAFKA_HOST"] ?? "localhost"
 let kafkaPort: Int = .init(ProcessInfo.processInfo.environment["KAFKA_PORT"] ?? "9092")!
+let numOfMessages: UInt = .init(ProcessInfo.processInfo.environment["MESSAGES_NUMBER"] ?? "15000000")!
 var bootstrapBrokerAddress: KafkaConfiguration.BrokerAddress!
 var producerConfig: KafkaProducerConfiguration!
 var uniqueTestTopic: String!
@@ -98,9 +99,9 @@ uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
 defer {
     try? client._deleteTopic(uniqueTestTopic, timeout: -1)
 }
-
-let numOfMessages: UInt = 15_000_000
+print("Generating \(numOfMessages) messages")
 let testMessages = createTestMessages(topic: uniqueTestTopic, count: numOfMessages)
+print("Finish generating \(numOfMessages) messages")
 let firstConsumerOffset = testMessages.count / 2
 let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: producerConfig, logger: logger)
 
