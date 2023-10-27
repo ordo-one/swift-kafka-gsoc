@@ -381,4 +381,125 @@ let benchmarks = {
             benchmark.stopMeasurement()
         }
     }
+
+    Benchmark("librdkafka producer with headers packed along with message")  { benchmark in
+        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(), count: numOfMessages)
+        var producerConfig: KafkaProducerConfiguration!
+
+        let uniqueGroupID = UUID().uuidString
+        let rdKafkaProducerConfig = TestRDKafkaClient._createDummyConfig(bootstrapAddresses: bootstrapBrokerAddress(), consumer: false)
+        
+        let producer = try TestRDKafkaClient._makeRDKafkaClient(config: rdKafkaProducerConfig, consumer: false)
+        try await producer.withKafkaHandlePointer { kafkaHandle in
+            let queue = rd_kafka_queue_get_main(kafkaHandle)
+            defer { rd_kafka_queue_destroy(queue) }
+
+            let topicHandle = rd_kafka_topic_new(
+                kafkaHandle,
+                uniqueTestTopic,
+                nil
+            )
+            defer { rd_kafka_topic_destroy(topicHandle) }
+            benchmark.startMeasurement()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    var messagesSent = 0
+                    while messagesSent < numOfMessages {
+                        let event = rd_kafka_queue_poll(kafkaHandle, 0)
+                        defer { rd_kafka_event_destroy(event) }
+                        
+                        guard let event else {
+                            try await Task.sleep(for: .milliseconds(10))
+                            continue
+                        }
+                        
+                        let rdEventType = rd_kafka_event_type(event)
+                        if rdEventType == RD_KAFKA_EVENT_DR {
+                            messagesSent += rd_kafka_event_message_count(event)
+                        }
+                    }
+                }
+                group.addTask {
+                    for message in testMessages {
+                        message.value.withUnsafeBytes { valueBuffer in
+                            message.key!.withUnsafeBytes { keyBuffer in
+                                var headersSize = 4 // number of headers
+                                message.headers.forEach { header in
+                                    headersSize += 4 // key size
+                                    headersSize += header.key.count + 1
+                                    headersSize += 4 // value size
+                                    headersSize += header.value?.readableBytes ?? 0
+                                }
+                                let totalBufferSize = valueBuffer.count + headersSize
+                                let buffer = UnsafeMutableRawBufferPointer.allocate(byteCount: totalBufferSize, alignment: 64)
+                                defer { buffer.deallocate() }
+                                
+                                var offset = 0
+                                
+                                addValue(buffer: buffer, offset: &offset, value: Int32(message.headers.count))
+                                
+                                for header in message.headers {
+                                    addValue(buffer: buffer, offset: &offset, value: Int32(header.key.count))
+                                    header.key.withCString { cStr in
+                                        let rawBuffer = UnsafeRawBufferPointer(start: cStr, count: header.key.count + 1)
+                                        copyBuffer(buffer: buffer, offset: &offset, from: rawBuffer)
+                                    }
+                                    
+                                    addValue(buffer: buffer, offset: &offset, value: Int32(header.value?.readableBytes ?? 0))
+                                    header.value?.withUnsafeReadableBytes{ buf in
+                                        copyBuffer(buffer: buffer, offset: &offset, from: buf)
+                                    }
+                                }
+                                
+                                copyBuffer(buffer: buffer, offset: &offset, from: valueBuffer)
+                                
+                                precondition(offset == totalBufferSize)
+
+                                while true {
+                                    let result = rd_kafka_produce(
+                                        topicHandle,
+                                        Int32(message.partition.rawValue),
+                                        RD_KAFKA_MSG_F_COPY,
+                                        UnsafeMutableRawPointer(mutating: buffer.baseAddress),
+                                        buffer.count,
+                                        keyBuffer.baseAddress,
+                                        keyBuffer.count,
+                                        nil
+                                    )
+
+                                    if rd_kafka_resp_err_t(result) != RD_KAFKA_RESP_ERR_NO_ERROR {
+                                        rd_kafka_flush(kafkaHandle, 10)
+                                        continue
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                try await group.waitForAll()
+            }
+            benchmark.stopMeasurement()
+        }
+    }
+}
+
+func copyBuffer(
+    buffer: UnsafeMutableRawBufferPointer,
+    offset: inout Int,
+    from: UnsafeRawBufferPointer) {
+        guard let baseAddress = from.baseAddress,
+              let offsetBuffer = buffer.baseAddress?.advanced(by: offset) else {
+            fatalError("Cannot copy buffer")
+        }
+        offsetBuffer.copyMemory(from: baseAddress, byteCount: from.count)
+        offset += from.count
+}
+
+func addValue<T>(
+    buffer: UnsafeMutableRawBufferPointer,
+    offset: inout Int,
+    value: T) {
+        buffer.storeBytes(of: value, toByteOffset: offset, as: T.self)
+        offset += MemoryLayout<T>.size
 }
