@@ -212,6 +212,7 @@ extension KafkaProducerConfiguration {
         resultDict["broker.address.family"] = self.broker.addressFamily.description
         resultDict["reconnect.backoff.ms"] = String(self.reconnect.backoff.rawValue)
         resultDict["reconnect.backoff.max.ms"] = String(self.reconnect.maximumBackoff.inMilliseconds)
+        resultDict["compression.codec"] = "zstd"
 
         // Merge with SecurityProtocol configuration dictionary
         resultDict.merge(self.securityProtocol.dictionary) { _, _ in
