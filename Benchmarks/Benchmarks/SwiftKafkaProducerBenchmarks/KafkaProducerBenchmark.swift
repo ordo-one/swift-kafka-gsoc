@@ -48,8 +48,8 @@ let benchmarks = {
         metrics: [.wallClock, .cpuTotal, .allocatedResidentMemory],
         warmupIterations: 0,
         scalingFactor: .one,
-        maxDuration: .seconds(5),
-        maxIterations: 1
+        maxDuration: .seconds(500),
+        maxIterations: 100
     )
     
     Benchmark.setup = {
@@ -140,7 +140,7 @@ let benchmarks = {
     }
     
     Benchmark("SwiftKafkaProducer with headers") { benchmark in
-        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(), count: numOfMessages)
+        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(count: 1), count: numOfMessages)
         var producerConfig: KafkaProducerConfiguration!
         
         producerConfig = KafkaProducerConfiguration(bootstrapBrokerAddresses: [bootstrapBrokerAddress()])
@@ -282,7 +282,7 @@ let benchmarks = {
     }
 
     Benchmark("librdkafka producer with headers")  { benchmark in
-        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(), count: numOfMessages)
+        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(count: 1), count: numOfMessages)
         var producerConfig: KafkaProducerConfiguration!
 
         let uniqueGroupID = UUID().uuidString
@@ -383,7 +383,7 @@ let benchmarks = {
     }
 
     Benchmark("librdkafka producer with headers packed along with message")  { benchmark in
-        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(), count: numOfMessages)
+        let testMessages = KafkaTestMessages.create(topic: uniqueTestTopic, headers: KafkaTestMessages.createHeaders(count: 1), count: numOfMessages)
         var producerConfig: KafkaProducerConfiguration!
 
         let uniqueGroupID = UUID().uuidString
