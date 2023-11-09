@@ -552,7 +552,7 @@ final class RDKafkaClient: Sendable {
     /// Atomic  incremental assignment of partitions to consume.
     /// - Parameter topicPartitionList: Pointer to a list of topics + partition pairs.
     func incrementalAssign(topicPartitionList: RDKafkaTopicPartitionList) async throws {
-        let error = try await performBlockingCall(queue: self.gcdQueue) {
+        let error = await performBlockingCall(queue: self.gcdQueue) {
             topicPartitionList.withListPointer { rd_kafka_incremental_assign(self.kafkaHandle, $0) }
         }
 
