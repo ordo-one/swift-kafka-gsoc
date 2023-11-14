@@ -22,16 +22,19 @@ import Logging
 import Benchmark
 import SwiftKafkaBenchmarkUtils
 
-private let numOfMessages: UInt =  .init(getFromEnv("MESSAGES_NUMBER") ?? "500000")!
+private let numOfMessages: UInt =  .init(getFromEnv("MESSAGES_NUMBER") ?? "50000")!
 
 private var uniqueTestTopic: String!
 private var client: TestRDKafkaClient!
 private var testMessages: [KafkaProducerMessage<String, String>]!
 
 private func prepareTopic(withHeaders: Bool = false) async throws {
+    benchLog("preparing topic")
     let basicConfig = TestRDKafkaClient._createDummyConfig(bootstrapAddresses: bootstrapBrokerAddress())
+    benchLog("basic config prepared")
     client = try TestRDKafkaClient._makeRDKafkaClient(config: basicConfig)
     
+    benchLog("client is ready")
     uniqueTestTopic = try client._createUniqueTopic(timeout: 10 * 1000)
     benchLog("Created topic \(uniqueTestTopic!)")
 
@@ -93,7 +96,10 @@ let benchmarks = {
     }
     
     Benchmark.teardown = {
-        try? client._deleteTopic(uniqueTestTopic, timeout: -1)
+        if let client,
+           let uniqueTestTopic {
+            try? client._deleteTopic(uniqueTestTopic, timeout: -1)
+        }
         client = nil
     }
     
@@ -167,9 +173,82 @@ let benchmarks = {
         
         benchmark.stopMeasurement()
     }
+
+    Benchmark("SwiftKafkaConsumer - manual commits - pollInterval 100ms (default)") { benchmark in
+        try await prepareTopic()
+        
+        let uniqueGroupID = UUID().uuidString
+        var consumerConfig = KafkaConsumerConfiguration(
+            consumptionStrategy: .group(
+                id: uniqueGroupID,
+                topics: [uniqueTestTopic]
+            ),
+            bootstrapBrokerAddresses: [bootstrapBrokerAddress()]
+        )
+//        consumerConfig.pollInterval = .milliseconds(1)
+        consumerConfig.autoOffsetReset = .beginning
+        consumerConfig.broker.addressFamily = .v4
+        consumerConfig.pollInterval = .milliseconds(1)
+        consumerConfig.isAutoCommitEnabled = false
+        
+        let consumer = try KafkaConsumer(
+            configuration: consumerConfig,
+            logger: logger
+        )
+        
+        let serviceGroupConfiguration2 = ServiceGroupConfiguration(services: [consumer], gracefulShutdownSignals: [.sigterm, .sigint], logger: logger)
+        let serviceGroup2 = ServiceGroup(configuration: serviceGroupConfiguration2)
+        
+        benchmark.startMeasurement()
+        
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            benchLog("Start consuming")
+            defer {
+                benchLog("Finish consuming")
+            }
+            // Run Task
+            group.addTask {
+                try await serviceGroup2.run()
+            }
+            
+            // Second Consumer Task
+            group.addTask {
+                var ctr: UInt64 = 0
+                var tmpCtr: UInt64 = 0
+                let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
+                let totalStartDate = Date.timeIntervalSinceReferenceDate
+                var totalBytes: UInt64 = 0
+                
+                for try await record in consumer.messages {
+                    ctr += 1
+                    totalBytes += UInt64(record.value.readableBytes)
+                    
+                    tmpCtr += 1
+                    if tmpCtr >= interval {
+                        benchLog("read \(ctr * 100 / UInt64(numOfMessages))%")
+                        tmpCtr = 0
+                    }
+                    try await consumer.commit(record)
+
+                    if ctr >= numOfMessages {
+                        break
+                    }
+                }
+                let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+                let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+                benchLog("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+            }
+            
+            // Wait for second Consumer Task to complete
+            try await group.next()
+            // Shutdown the serviceGroup
+            await serviceGroup2.triggerGracefulShutdown()
+        }
+        
+        benchmark.stopMeasurement()
+    }
     
-    
-    Benchmark("SwiftKafkaConsumer -- manual commits") { benchmark in
+    Benchmark("SwiftKafkaConsumer - manual commits - pollInterval 1ms") { benchmark in
         try await prepareTopic()
         
         let uniqueGroupID = UUID().uuidString
@@ -223,9 +302,83 @@ let benchmarks = {
                         benchLog("read \(ctr * 100 / UInt64(numOfMessages))%")
                         tmpCtr = 0
                     }
-                    
                     try await consumer.commit(record)
+
+                    if ctr >= numOfMessages {
+                        break
+                    }
+                }
+                let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+                let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+                benchLog("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+            }
+            
+            // Wait for second Consumer Task to complete
+            try await group.next()
+            // Shutdown the serviceGroup
+            await serviceGroup2.triggerGracefulShutdown()
+        }
+        
+        benchmark.stopMeasurement()
+    }
+    
+    
+    Benchmark("SwiftKafkaConsumer - manual commits - pollInterval 0ms") { benchmark in
+        try await prepareTopic()
+        
+        let uniqueGroupID = UUID().uuidString
+        var consumerConfig = KafkaConsumerConfiguration(
+            consumptionStrategy: .group(
+                id: uniqueGroupID,
+                topics: [uniqueTestTopic]
+            ),
+            bootstrapBrokerAddresses: [bootstrapBrokerAddress()]
+        )
+        consumerConfig.pollInterval = .zero
+        consumerConfig.autoOffsetReset = .beginning
+        consumerConfig.broker.addressFamily = .v4
+        consumerConfig.pollInterval = .milliseconds(1)
+        consumerConfig.isAutoCommitEnabled = false
+        
+        let consumer = try KafkaConsumer(
+            configuration: consumerConfig,
+            logger: logger
+        )
+        
+        let serviceGroupConfiguration2 = ServiceGroupConfiguration(services: [consumer], gracefulShutdownSignals: [.sigterm, .sigint], logger: logger)
+        let serviceGroup2 = ServiceGroup(configuration: serviceGroupConfiguration2)
+        
+        benchmark.startMeasurement()
+        
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            benchLog("Start consuming")
+            defer {
+                benchLog("Finish consuming")
+            }
+            // Run Task
+            group.addTask {
+                try await serviceGroup2.run()
+            }
+            
+            // Second Consumer Task
+            group.addTask {
+                var ctr: UInt64 = 0
+                var tmpCtr: UInt64 = 0
+                let interval: UInt64 = Swift.max(UInt64(numOfMessages / 20), 1)
+                let totalStartDate = Date.timeIntervalSinceReferenceDate
+                var totalBytes: UInt64 = 0
+                
+                for try await record in consumer.messages {
+                    ctr += 1
+                    totalBytes += UInt64(record.value.readableBytes)
                     
+                    tmpCtr += 1
+                    if tmpCtr >= interval {
+                        benchLog("read \(ctr * 100 / UInt64(numOfMessages))%")
+                        tmpCtr = 0
+                    }
+                    try await consumer.commit(record)
+
                     if ctr >= numOfMessages {
                         break
                     }
