@@ -14,6 +14,7 @@
 
 import Crdkafka
 import Dispatch
+import class Foundation.JSONDecoder
 import Logging
 
 /// Base class for ``KafkaProducer`` and ``KafkaConsumer``,
@@ -298,6 +299,7 @@ final public class RDKafkaClient: Sendable {
     /// Swift wrapper for events from `librdkafka`'s event queue.
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
+        case statistics(RDKafkaStatistics)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -324,6 +326,10 @@ final public class RDKafkaClient: Sendable {
                 self.handleLogEvent(event)
             case .offsetCommit:
                 self.handleOffsetCommitEvent(event)
+            case .statistics:
+                if let forwardEvent = self.handleStatistics(event) {
+                    events.append(forwardEvent)
+                }
             case .none:
                 // Finished reading events, return early
                 return events
@@ -353,6 +359,22 @@ final public class RDKafkaClient: Sendable {
 
         // The returned message(s) MUST NOT be freed with rd_kafka_message_destroy().
         return .deliveryReport(results: deliveryReportResults)
+    }
+
+    /// Handle event of type `RDKafkaEvent.statistics`.
+    ///
+    /// - Parameter event: Pointer to underlying `rd_kafka_event_t`.
+    private func handleStatistics(_ event: OpaquePointer?) -> KafkaEvent? {
+        let jsonStr = String(cString: rd_kafka_event_stats(event))
+        do {
+            if let jsonData = jsonStr.data(using: .utf8) {
+                let json = try JSONDecoder().decode(RDKafkaStatistics.self, from: jsonData)
+                return .statistics(json)
+            }
+        } catch {
+            assertionFailure("Error occurred when decoding JSON statistics: \(error) when decoding \(jsonStr)")
+        }
+        return nil
     }
 
     /// Handle event of type `RDKafkaEvent.log`.
@@ -500,7 +522,7 @@ final public class RDKafkaClient: Sendable {
             // which can occur during rebalancing or when the consumer is shutting down.
             // See "Upgrade considerations" for more details: https://github.com/confluentinc/librdkafka/releases/tag/v1.9.0
             // Since Kafka Consumers are designed for at-least-once processing, failing to commit here is acceptable.
-            if error != RD_KAFKA_RESP_ERR__STATE {
+            if error == RD_KAFKA_RESP_ERR__STATE {
                 return
             }
             throw KafkaError.rdKafkaError(wrapping: error)
