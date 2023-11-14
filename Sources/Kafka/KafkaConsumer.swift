@@ -376,12 +376,13 @@ public final class KafkaConsumer: Sendable, Service {
 
     /// Run loop polling Kafka for new events.
     private func eventRunLoop() async throws {
+        var pollInterval = configuration.pollInterval
         while !Task.isCancelled {
             let nextAction = self.stateMachine.withLockedValue { $0.nextEventPollLoopAction() }
             switch nextAction {
             case .pollForEvents(let client):
                 // Event poll to serve any events queued inside of `librdkafka`.
-                let events = client.eventPoll()
+                let (events, shouldSleep) = client.eventPollWithShouldSleep()
                 for event in events {
                     switch event {
                     case .statistics(let statistics):
@@ -390,7 +391,13 @@ public final class KafkaConsumer: Sendable, Service {
                         break
                     }
                 }
-                try await Task.sleep(for: self.configuration.pollInterval)
+                if shouldSleep {
+                    try await Task.sleep(for: pollInterval)
+                    pollInterval = min(pollInterval * 2, self.configuration.pollInterval)
+                } else {
+                    pollInterval = max(pollInterval / 3, .microseconds(1))
+                    await Task.yield()
+                }
             case .terminatePollLoop:
                 return
             }

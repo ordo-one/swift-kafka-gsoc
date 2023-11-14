@@ -340,6 +340,50 @@ final public class RDKafkaClient: Sendable {
 
         return events
     }
+    
+    
+    /// Poll the event `rd_kafka_queue_t` for new events.
+    ///
+    /// - Parameter maxEvents:Maximum number of events to serve in one invocation.
+    func eventPollWithShouldSleep(maxEvents: Int = 100) -> (events: [KafkaEvent], shouldSleep: Bool) {
+        var events = [KafkaEvent]()
+        events.reserveCapacity(maxEvents)
+
+        var shouldSleep = true
+        
+        for _ in 0..<maxEvents {
+            let event = rd_kafka_queue_poll(self.queue, 0)
+            defer { rd_kafka_event_destroy(event) }
+
+            let rdEventType = rd_kafka_event_type(event)
+            guard let eventType = RDKafkaEvent(rawValue: rdEventType) else {
+                fatalError("Unsupported event type: \(rdEventType)")
+            }
+
+            switch eventType {
+            case .deliveryReport:
+                let forwardEvent = self.handleDeliveryReportEvent(event)
+                events.append(forwardEvent)
+                shouldSleep = false
+            case .log:
+                self.handleLogEvent(event)
+            case .offsetCommit:
+                self.handleOffsetCommitEvent(event)
+                shouldSleep = false
+            case .statistics:
+                if let forwardEvent = self.handleStatistics(event) {
+                    events.append(forwardEvent)
+                }
+            case .none:
+                // Finished reading events, return early
+                return (events, shouldSleep)
+            default:
+                break // Ignored Event
+            }
+        }
+
+        return (events, shouldSleep)
+    }
 
     /// Handle event of type `RDKafkaEvent.deliveryReport`.
     ///
