@@ -209,6 +209,7 @@ public final class KafkaConsumer: Sendable, Service {
 
         self.messages = KafkaConsumerMessages(
             stateMachine: self.stateMachine,
+            enablePartitionEof: configuration.enablePartitionEof,
             wrappedSequence: sourceAndSequence.sequence
         )
 
