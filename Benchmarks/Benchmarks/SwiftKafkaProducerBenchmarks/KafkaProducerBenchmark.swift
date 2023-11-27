@@ -12,6 +12,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CNIOBoringSSL_ssl.h"
+import Benchmark
+import Crdkafka
+import Kafka
 
-#define RAND_priv_bytes(buf, num) RAND_bytes((buf), (num))
+let benchmarks = {
+    Benchmark.defaultConfiguration = .init(
+        metrics: [.wallClock, .cpuTotal, .allocatedResidentMemory, .contextSwitches, .throughput] + .arc,
+        warmupIterations: 0,
+        scalingFactor: .one,
+        maxDuration: .seconds(5),
+        maxIterations: 100
+    )
+
+    Benchmark.setup = {}
+
+    Benchmark.teardown = {}
+}

@@ -116,10 +116,16 @@ public final class KafkaProducer: Service, Sendable {
     ) throws {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
+        var subscribedEvents: [RDKafkaEvent] = [.log] // No .deliveryReport here!
+
+        if configuration.metrics.enabled {
+            subscribedEvents.append(.statistics)
+        }
+
         let client = try RDKafkaClient.makeClient(
             type: .producer,
             configDictionary: configuration.dictionary,
-            events: [.log], // No .deliveryReport here!
+            events: subscribedEvents,
             logger: logger
         )
 
@@ -156,10 +162,16 @@ public final class KafkaProducer: Service, Sendable {
     ) throws -> (KafkaProducer, KafkaProducerEvents) {
         let stateMachine = NIOLockedValueBox(StateMachine(logger: logger))
 
+        var subscribedEvents: [RDKafkaEvent] = [.log, .deliveryReport]
+        // Listen to statistics events when statistics enabled
+        if configuration.metrics.enabled {
+            subscribedEvents.append(.statistics)
+        }
+
         let client = try RDKafkaClient.makeClient(
             type: .producer,
             configDictionary: configuration.dictionary,
-            events: [.log, .deliveryReport],
+            events: subscribedEvents,
             logger: logger
         )
 
@@ -212,9 +224,12 @@ public final class KafkaProducer: Service, Sendable {
             case .pollAndYield(let client, let source):
                 let events = client.eventPoll()
                 for event in events {
-                    let producerEvent = KafkaProducerEvent(event)
-                    // Ignore YieldResult as we don't support back pressure in KafkaProducer
-                    _ = source?.yield(producerEvent)
+                    switch event {
+                    case .statistics(let statistics):
+                        self.configuration.metrics.update(with: statistics)
+                    case .deliveryReport(let reports):
+                        _ = source?.yield(.deliveryReports(reports))
+                    }
                 }
                 try await Task.sleep(for: self.configuration.pollInterval)
             case .flushFinishSourceAndTerminatePollLoop(let client, let source):
@@ -294,7 +309,7 @@ extension KafkaProducer {
             /// All incoming events will be dropped.
             ///
             /// - Parameter client: Client used for handling the connection to the Kafka cluster.
-            case consumptionStopped(client: RDKafkaClient)
+            case eventConsumptionFinished(client: RDKafkaClient)
             /// ``KafkaProducer/triggerGracefulShutdown()`` was invoked so we are flushing
             /// any messages that wait to be sent and serve any remaining queued callbacks.
             ///
@@ -359,7 +374,7 @@ extension KafkaProducer {
                 fatalError("\(#function) invoked while still in state \(self.state)")
             case .started(let client, _, let source, _):
                 return .pollAndYield(client: client, source: source)
-            case .consumptionStopped(let client):
+            case .eventConsumptionFinished(let client):
                 return .pollWithoutYield(client: client)
             case .finishing(let client, let source):
                 return .flushFinishSourceAndTerminatePollLoop(client: client, source: source)
@@ -400,7 +415,7 @@ extension KafkaProducer {
                     newMessageID: newMessageID,
                     topicHandles: topicHandles
                 )
-            case .consumptionStopped:
+            case .eventConsumptionFinished:
                 throw KafkaError.connectionClosed(reason: "Sequence consuming events was abruptly terminated, producer closed")
             case .finishing:
                 throw KafkaError.connectionClosed(reason: "Producer in the process of finishing")
@@ -423,10 +438,10 @@ extension KafkaProducer {
             switch self.state {
             case .uninitialized:
                 fatalError("\(#function) invoked while still in state \(self.state)")
-            case .consumptionStopped:
+            case .eventConsumptionFinished:
                 fatalError("messageSequenceTerminated() must not be invoked more than once")
             case .started(let client, _, let source, _):
-                self.state = .consumptionStopped(client: client)
+                self.state = .eventConsumptionFinished(client: client)
                 return .finishSource(source: source)
             case .finishing(let client, let source):
                 // Setting source to nil to prevent incoming events from buffering in `source`
@@ -447,7 +462,7 @@ extension KafkaProducer {
                 fatalError("\(#function) invoked while still in state \(self.state)")
             case .started(let client, _, let source, _):
                 self.state = .finishing(client: client, source: source)
-            case .consumptionStopped(let client):
+            case .eventConsumptionFinished(let client):
                 self.state = .finishing(client: client, source: nil)
             case .finishing, .finished:
                 break
