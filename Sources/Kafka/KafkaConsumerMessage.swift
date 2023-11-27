@@ -29,9 +29,9 @@ public struct KafkaConsumerMessage {
     public var value: ByteBuffer
     /// The offset of the message in its partition.
     public var offset: KafkaOffset
-    
-    
-    var eof: Bool {
+
+    /// If ``true``, means it is not a message but partition EOF event
+    public var eof: Bool {
         self.value.readableBytesView.isEmpty
     }
 
