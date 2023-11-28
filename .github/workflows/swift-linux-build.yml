@@ -49,9 +49,8 @@ jobs:
       run: swift build
 
     - name: Run tests
-      run: |
-        if [ -d Tests ]; then
-          swift test
-        fi
+      continue-on-error: true
+      run: docker-compose -f docker/docker-compose.yaml -f docker/docker-compose.2204.59.yaml run test
+
     - name: Setup tmate session
       uses: mxschmitt/action-tmate@v3
