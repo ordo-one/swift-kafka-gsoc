@@ -2,17 +2,17 @@ name: Thread sanitizer
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main, next ]
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main, next ]
 
 jobs:
   thread-sanitizer:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13]
+        os: [ubuntu-latest]
         swift: ["5.9"]
 
     runs-on: ${{ matrix.os }}

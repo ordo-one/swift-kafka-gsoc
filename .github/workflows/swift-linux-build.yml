@@ -19,6 +19,12 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    services:
+      redpanda:
+        image: redpandadata/redpanda:latest
+        ports:
+          - 9092:9092
+
     steps:
     - uses: fwal/setup-swift@v1
       with:
@@ -45,5 +51,5 @@ jobs:
     - name: Run tests
       run: |
         if [ -d Tests ]; then
-          swift test --parallel
+          swift test
         fi
