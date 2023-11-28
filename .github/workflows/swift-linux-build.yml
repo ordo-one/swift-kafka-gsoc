@@ -24,6 +24,8 @@ jobs:
         image: redpandadata/redpanda:latest
         ports:
           - 9092:9092
+        options: >-
+          --set redpanda.auto_create_topics_enabled=true
 
     steps:
     - uses: fwal/setup-swift@v1
@@ -53,3 +55,5 @@ jobs:
         if [ -d Tests ]; then
           swift test
         fi
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
