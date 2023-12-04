@@ -12,12 +12,12 @@ public final class KafkaMetadata {
     }
     
     public private(set) lazy var topics = {
-        (0..<Int(self.metadata.pointee.topic_cnt)).map { KafkaMetadataTopic(metadata: self, topic: self.metadata.pointee.topics[$0]) }
+        (0..<Int(self.metadata.pointee.topic_cnt)).map { KafkaTopicMetadata(metadata: self, topic: self.metadata.pointee.topics[$0]) }
     }()
 }
 
 // must be a class to allow mutating lazy vars, otherwise require struct copies
-public final class KafkaMetadataTopic {
+public final class KafkaTopicMetadata {
     private let metadata: KafkaMetadata // retain metadata
     private let topic: rd_kafka_metadata_topic
     
@@ -31,11 +31,11 @@ public final class KafkaMetadataTopic {
     }()
     
     public private(set) lazy var partitions = {
-        (0..<Int(self.topic.partition_cnt)).map { KafkaMetadataPartition(metadata: self.metadata, partition: topic.partitions[$0]) }
+        (0..<Int(self.topic.partition_cnt)).map { KafkaPartitionMetadata(metadata: self.metadata, partition: topic.partitions[$0]) }
     }()
 }
 
-public struct KafkaMetadataPartition {
+public struct KafkaPartitionMetadata {
     private let metadata: KafkaMetadata // retain metadata
     private let partition: rd_kafka_metadata_partition
     
