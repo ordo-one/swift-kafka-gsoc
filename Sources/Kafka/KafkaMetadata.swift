@@ -12,15 +12,7 @@ public final class KafkaMetadata {
     }
     
     public private(set) lazy var topics = {
-        let metadata = self.metadata.pointee
-        let topicCount = Int(metadata.topic_cnt)
-        var topics = [KafkaMetadataTopic]()
-        topics.reserveCapacity(topicCount)
-        
-        for i in 0..<topicCount {
-            topics.append(.init(metadata: self, topic: metadata.topics[i]))
-        }
-        return topics
+        (0..<Int(self.metadata.pointee.topic_cnt)).map { KafkaMetadataTopic(metadata: self, topic: self.metadata.pointee.topics[$0]) }
     }()
 }
 
@@ -39,16 +31,7 @@ public final class KafkaMetadataTopic {
     }()
     
     public private(set) lazy var partitions = {
-        let partitionCount = Int(self.topic.partition_cnt)
-        
-        var partitions = [KafkaMetadataPartition]()
-        partitions.reserveCapacity(partitionCount)
-        
-        for i in 0..<partitionCount {
-            partitions.append(.init(metadata: self.metadata, partition: topic.partitions[i]))
-        }
-        
-        return partitions
+        (0..<Int(self.topic.partition_cnt)).map { KafkaMetadataPartition(metadata: self.metadata, partition: topic.partitions[$0]) }
     }()
 }
 
