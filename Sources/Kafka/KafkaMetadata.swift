@@ -11,7 +11,7 @@ public final class KafkaMetadata {
         rd_kafka_metadata_destroy(metadata)
     }
     
-    public var topics: [KafkaMetadataTopic] {
+    public private(set) lazy var topics = {
         let metadata = self.metadata.pointee
         let topicCount = Int(metadata.topic_cnt)
         var topics = [KafkaMetadataTopic]()
@@ -21,10 +21,11 @@ public final class KafkaMetadata {
             topics.append(.init(metadata: self, topic: metadata.topics[i]))
         }
         return topics
-    }
+    }()
 }
 
-public struct KafkaMetadataTopic {
+// must be a class to allow mutating lazy vars, otherwise require struct copies
+public final class KafkaMetadataTopic {
     private let metadata: KafkaMetadata // retain metadata
     private let topic: rd_kafka_metadata_topic
     
@@ -32,23 +33,23 @@ public struct KafkaMetadataTopic {
         self.metadata = metadata
         self.topic = topic
     }
+
+    public private(set) lazy var name = {
+        String(cString: self.topic.topic)
+    }()
     
-    public var name: String {
-        String(cString: topic.topic)
-    }
-    
-    public var partitions: [KafkaMetadataPartition] {
-        let partitionCount = Int(topic.partition_cnt)
+    public private(set) lazy var partitions = {
+        let partitionCount = Int(self.topic.partition_cnt)
         
         var partitions = [KafkaMetadataPartition]()
         partitions.reserveCapacity(partitionCount)
         
         for i in 0..<partitionCount {
-            partitions.append(.init(metadata: metadata, partition: topic.partitions[i]))
+            partitions.append(.init(metadata: self.metadata, partition: topic.partitions[i]))
         }
         
         return partitions
-    }
+    }()
 }
 
 public struct KafkaMetadataPartition {
