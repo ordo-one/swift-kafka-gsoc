@@ -106,7 +106,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
             while !Task.isCancelled {
                 if let client = self.cachedClient, // fast path
                    let message = try client.consumerPoll() {
-                    if message.eof && self.enablePartitionEof {
+                    if !message.eof || self.enablePartitionEof {
                         return message
                     } else {
                         continue
