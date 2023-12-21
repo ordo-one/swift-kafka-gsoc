@@ -106,7 +106,11 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
             while !Task.isCancelled {
                 if let client = self.cachedClient, // fast path
                    let message = try client.consumerPoll() {
-                    return message
+                    if message.eof && self.enablePartitionEof {
+                        return message
+                    } else {
+                        continue
+                    }
                 }
                 let action = self.stateMachine.stateMachine.withLockedValue { $0.nextConsumerPollLoopAction() }
                 switch action {
@@ -118,7 +122,7 @@ public struct KafkaConsumerMessages: Sendable, AsyncSequence {
                         try await Task.sleep(for: self.pollInterval)
                         continue
                     }
-                    if message.eof && !self.enablePartitionEof{
+                    if message.eof && !self.enablePartitionEof {
                         continue
                     }
                     self.cachedClient = client
