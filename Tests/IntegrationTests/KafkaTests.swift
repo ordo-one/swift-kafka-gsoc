@@ -821,7 +821,7 @@ final class KafkaTests: XCTestCase {
     }
     // MARK: - Helpers
 
-    func createUniqueTopic(partitions: Int32 = -1 /* default num for cluster */) throws -> String {
+    func createUniqueTopic(_ name: String? = nil, partitions: Int32 = -1 /* default num for cluster */) throws -> String {
         // TODO: ok to block here? How to make setup async?
 
         var basicConfig = KafkaConsumerConfiguration(
@@ -836,6 +836,9 @@ final class KafkaTests: XCTestCase {
             events: [],
             logger: .kafkaTest
         )
+        if let name {
+            return try client._createUniqueTopic(name, partitions: partitions, timeout: 10 * 1000)
+        }
         return try client._createUniqueTopic(partitions: partitions, timeout: 10 * 1000)
     }
     
@@ -901,36 +904,49 @@ final class KafkaTests: XCTestCase {
             XCTAssertTrue(acknowledgedMessages.contains(where: { $0.value == ByteBuffer(string: message.value) }))
         }
     }
-/*
+    
     func testProduceAndConsumeWithTransaction() async throws {
-        let testMessages = Self.createTestMessages(topic: uniqueTestTopic, count: 10)
+        let transactionalId = "555"
+        let topic1Name = "topic-11"
+        let topic2Name = "topic-22"
+        let groupId = "subscription-test-group-id-12"
+        
+        let topic1 = (try? createUniqueTopic(topic1Name)) ?? topic1Name
+        let topic2 = (try? createUniqueTopic(topic2Name)) ?? topic2Name
+        
+        let testMessages = Self.createTestMessages(topic: topic1, count: 10)
 
         let (producer, events) = try KafkaProducer.makeProducerWithEvents(configuration: self.producerConfig, logger: .kafkaTest)
 
-        let transactionConfigProducer = KafkaTransactionalProducerConfiguration(
-            transactionalId: "1234",
+        var transactionConfigProducer = KafkaTransactionalProducerConfiguration(
+            transactionalId: transactionalId,
             bootstrapBrokerAddresses: [self.bootstrapBrokerAddress])
+        
+        transactionConfigProducer.identifier = "transaction-1234"
 
         let transactionalProducer = try await KafkaTransactionalProducer(config: transactionConfigProducer, logger: .kafkaTest)
 
-        let makeConsumerConfig = { (topic: String) -> KafkaConsumerConfiguration in
+        let makeConsumerConfig = { (topic: String, latest: Bool) -> KafkaConsumerConfiguration in
             var consumerConfig = KafkaConsumerConfiguration(
-                consumptionStrategy: .group(id: "subscription-test-group-id", topics: [topic]),
+                consumptionStrategy: .group(id: "\(groupId)-\(latest)", topics: [topic]),
                 bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
             )
-            consumerConfig.autoOffsetReset = .beginning // Always read topics from beginning
+            consumerConfig.identifier = "transaction-1234"
+
+            consumerConfig.autoOffsetReset = .beginning // latest ? .latest : .beginning // Always read topics from beginning
             consumerConfig.broker.addressFamily = .v4
             consumerConfig.isAutoCommitEnabled = false
+//            consumerConfig.groupInstanceId = "subscription-test-group-instance-id"
             return consumerConfig
         }
 
         let consumer = try KafkaConsumer(
-            configuration: makeConsumerConfig(uniqueTestTopic),
+            configuration: makeConsumerConfig(topic1, true),
             logger: .kafkaTest
         )
 
         let consumerAfterTransaction = try KafkaConsumer(
-            configuration: makeConsumerConfig(uniqueTestTopic2),
+            configuration: makeConsumerConfig(topic2, false),
             logger: .kafkaTest
         )
 
@@ -953,6 +969,7 @@ final class KafkaTests: XCTestCase {
 
             // Producer Task
             group.addTask {
+                try await Task.sleep(for: .seconds(2))
                 try await Self.sendAndAcknowledgeMessages(
                     producer: producer,
                     events: events,
@@ -970,13 +987,14 @@ final class KafkaTests: XCTestCase {
                     count += 1
                     try await transactionalProducer.withTransaction { transaction in
                         let newMessage = KafkaProducerMessage(
-                            topic: self.uniqueTestTopic2,
+                            topic: topic2,
                             value: message.value.description + "_updated"
                         )
                         try transaction.send(newMessage)
+                        
                         let partitionlist = RDKafkaTopicPartitionList()
-                        partitionlist.setOffset(topic: self.uniqueTestTopic, partition: message.partition, offset: message.offset)
-                        try await transaction.send(offsets: partitionlist, forConsumer: consumer)
+                        partitionlist.setOffset(topic: topic1, partition: message.partition, offset: message.offset)
+                        try await transaction.send(offsets: .init(from: partitionlist), forConsumer: consumer)
                     }
 
                     if count >= testMessages.count {
@@ -1010,7 +1028,6 @@ final class KafkaTests: XCTestCase {
     }
     
     
-    */
    #if false 
     func testOrdo() async throws {
 //        let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
