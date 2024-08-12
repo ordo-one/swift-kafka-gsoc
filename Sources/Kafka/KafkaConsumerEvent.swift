@@ -12,6 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Crdkafka
+import NIOConcurrencyHelpers
+
 public struct KafkaTopicList {
     let list: RDKafkaTopicPartitionList
     
@@ -96,10 +99,88 @@ public enum RebalanceAction : Sendable, Hashable {
     case error(KafkaRebalanceProtocol, KafkaTopicList, KafkaError)
 }
 
+final public class Rebalance: Sendable, CustomStringConvertible {
+    private let client: RDKafkaClient
+    let  rebalanceApplied: NIOLockedValueBox<Bool> = .init(false)
+
+
+    public enum RebalanceProtocol: Sendable {
+        case cooperative
+        case eager
+        case none
+
+        static func convert(from proto: String) -> Self {
+            switch proto {
+            case "COOPERATIVE": return .cooperative
+            case "EAGER": return .eager
+            default: return .none
+            }
+        }
+    }
+
+    public enum RebalanceAction: Sendable {
+        case assign(KafkaTopicList)
+        case revoke(KafkaTopicList)
+        case error(KafkaTopicList, KafkaError)
+    }
+
+    init(client: RDKafkaClient, rebalanceProtocol: RebalanceProtocol, rebalanceAction: RebalanceAction) {
+        self.client = client
+        self.rebalanceProtocol = rebalanceProtocol
+        self.rebalanceAction = rebalanceAction
+
+        client.logger.info("init rebalance")
+    }
+
+    deinit {
+        if !rebalanceApplied.withLockedValue { $0 } {
+            client.logger.info("Attention: rebalance auto triggered!")
+            client.withKafkaHandlePointer {
+                rd_kafka_assign($0, nil)
+            }
+        }
+        client.logger.info("deinit rebalance")
+    }
+
+    public let rebalanceProtocol: RebalanceProtocol
+    public let rebalanceAction: RebalanceAction
+
+    public func assign(to partitions: KafkaTopicList?) async throws {
+        try await client.assign(topicPartitionList: partitions?.list)
+        applied()
+    }
+
+    public func assignIncremental(to partitions: KafkaTopicList) async throws {
+        try await client.incrementalAssign(topicPartitionList: partitions.list)
+        applied()
+    }
+
+    public func unassignIncremental(to partitions: KafkaTopicList) async throws {
+        try await client.incrementalUnassign(topicPartitionList: partitions.list)
+        applied()
+    }
+
+    public func seek(to partitions: KafkaTopicList, timeout: Duration = .seconds(1)) async throws {
+        try await client.seek(topicPartitionList: partitions.list, timeout: timeout)
+    }
+
+    public func applied(_ funcName: Int = #line) {
+        rebalanceApplied.withLockedValue {
+            $0 = true
+        }
+//        rebalanceApplied = true
+        client.logger.info("Rebalance applied \(funcName)")
+    }
+
+    public var description: String {
+        "Rebalance: \(rebalanceProtocol): \(rebalanceAction)"
+    }
+}
+
 /// An enumeration representing events that can be received through the ``KafkaConsumerEvents`` asynchronous sequence.
-public enum KafkaConsumerEvent: Sendable, Hashable {
+public enum KafkaConsumerEvent: Sendable {
     /// Rebalance from librdkafka
-    case rebalance(RebalanceAction)
+    case rebalance(Rebalance)
     /// - Important: Always provide a `default` case when switiching over this `enum`.
     case DO_NOT_SWITCH_OVER_THIS_EXHAUSITVELY
 

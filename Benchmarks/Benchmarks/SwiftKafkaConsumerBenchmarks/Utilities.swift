@@ -39,26 +39,29 @@ func benchLog(_ log: @autoclosure () -> Logger.Message) {
     Logger.perfLogger.info(log())
     #endif
 }
-
-func createTopic(partitions: Int32) throws -> String {
+let basicConfig = { 
     var basicConfig = KafkaConsumerConfiguration(
         consumptionStrategy: .group(id: "no-group", topics: []),
         bootstrapBrokerAddresses: [brokerAddress]
-    )
+        )
     basicConfig.broker.addressFamily = .v4
+    return basicConfig
+}()
 
-    let client = try RDKafkaClient.makeClientForTopics(config: basicConfig, logger: .perfLogger)
+private let client = try! RDKafkaClient.makeClientForTopics(config: basicConfig, logger: .perfLogger)
+
+func createTopic(partitions: Int32) throws -> String {
+//    var basicConfig = KafkaConsumerConfiguration(
+//        consumptionStrategy: .group(id: "no-group", topics: []),
+//        bootstrapBrokerAddresses: [brokerAddress]
+//    )
+//    basicConfig.broker.addressFamily = .v4
+//
+//    let client = try RDKafkaClient.makeClientForTopics(config: basicConfig, logger: .perfLogger)
     return try client._createUniqueTopic(partitions: partitions, timeout: 10 * 1000)
 }
 
 func deleteTopic(_ topic: String) throws {
-    var basicConfig = KafkaConsumerConfiguration(
-        consumptionStrategy: .group(id: "no-group", topics: []),
-        bootstrapBrokerAddresses: [brokerAddress]
-    )
-    basicConfig.broker.addressFamily = .v4
-
-    let client = try RDKafkaClient.makeClientForTopics(config: basicConfig, logger: .perfLogger)
     try client._deleteTopic(topic, timeout: 10 * 1000)
 }
 

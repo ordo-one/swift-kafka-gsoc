@@ -16,6 +16,7 @@ import Crdkafka
 import Dispatch
 import class Foundation.JSONDecoder
 import Logging
+import class Foundation.Thread
 
 /// Base class for ``KafkaProducer`` and ``KafkaConsumer``,
 /// which is used to handle the connection to the Kafka ecosystem.
@@ -33,7 +34,7 @@ public final class RDKafkaClient: Sendable {
     /// Handle for the C library's Kafka instance.
     private let kafkaHandle: OpaquePointer
     /// A logger.
-    private let logger: Logger
+    let logger: Logger
 
     /// `librdkafka`'s `rd_kafka_queue_t` that events are received on.
     private let queue: OpaquePointer
@@ -62,15 +63,18 @@ public final class RDKafkaClient: Sendable {
     }
 
     deinit {
+        logger.info("dtor RDKafkaClient")
         // Loose reference to librdkafka's event queue
         rd_kafka_queue_destroy(self.queue)
         rd_kafka_destroy(kafkaHandle)
+        logger.info("dtor finished")
     }
 
     typealias RebalanceCallback = @Sendable (KafkaEvent) -> ()
-    final class RebalanceCallbackStorage: Sendable {
+    final class RebalanceCallbackStorage: @unchecked Sendable {
         let rebalanceCallback: RebalanceCallback
-        
+        fileprivate weak var client: RDKafkaClient?
+
         init(rebalanceCallback: @escaping RebalanceCallback) {
             self.rebalanceCallback = rebalanceCallback
         }
@@ -96,24 +100,52 @@ public final class RDKafkaClient: Sendable {
                 let rebalanceCb = Unmanaged.passUnretained(rebalanceCallBackStorage)
                 rd_kafka_conf_set_opaque(rdConfig, rebalanceCb.toOpaque())
                 rd_kafka_conf_set_rebalance_cb(rdConfig) { handle, code, partitions, rebalanceOpaqueCb in
-                    let protoStringDef = String(cString: rd_kafka_rebalance_protocol(handle))
-                    let rebalanceProtocol = KafkaRebalanceProtocol.convert(from: protoStringDef)
-                    guard let partitions else {
+//                    let protoStringDef = String(cString: rd_kafka_rebalance_protocol(handle))
+//                    let rebalanceProtocol = KafkaRebalanceProtocol.convert(from: protoStringDef)
+                    guard let partitions = rd_kafka_topic_partition_list_copy(partitions) else {
                         fatalError("No partitions in callback")
                     }
+
                     let list = KafkaTopicList(from: .init(from: partitions))
-                    var event: KafkaEvent
+                    var action: Rebalance.RebalanceAction
                     switch code {
                     case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
-                        event = .rebalance(.assign(rebalanceProtocol, list))
+                        action = .assign(list)
                     case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
-                        event =  .rebalance(.revoke(rebalanceProtocol, list))
+                        action =  .revoke(list)
                     default:
-                        event = .rebalance(.error(rebalanceProtocol, list, KafkaError.rdKafkaError(wrapping: code)))
+                        action = .error(list, KafkaError.rdKafkaError(wrapping: code))
                     }
                     if let rebalanceOpaqueCb {
                         let rebalanceCb = Unmanaged<RebalanceCallbackStorage>.fromOpaque(rebalanceOpaqueCb).takeUnretainedValue()
-                        rebalanceCb.rebalanceCallback(event)
+                        guard let client = rebalanceCb.client else {
+                            rd_kafka_assign(handle, nil) // fallback
+                            return
+                        }
+                        let rebalance = Rebalance(
+                                    client: client,
+                                    rebalanceProtocol: .convert(
+                                        from: String(
+                                            cString: rd_kafka_rebalance_protocol(handle)
+                                        )
+                                    ), 
+                                    rebalanceAction: action
+                                )
+                        rebalanceCb.rebalanceCallback(
+                            .rebalance(
+                                rebalance
+                            )
+                        )
+
+                        client.logger.info("Rebalance called")
+//                        while true {
+//                            let rebalanceApplied = rebalance.rebalanceApplied.withLockedValue { $0 }
+//                            client.logger.info("Wait for rebalance to happen, current value: \(rebalanceApplied)")
+                            /*if rebalanceApplied {
+                                break
+                            }
+                            Thread.sleep(forTimeInterval: 1)*/
+//                        }
                     } else {
                         fatalError("Cannot find rebalance cb")
                     }
@@ -139,7 +171,9 @@ public final class RDKafkaClient: Sendable {
             throw KafkaError.client(reason: errorString)
         }
 
-        return RDKafkaClient(type: type, kafkaHandle: handle, logger: logger, rebalanceCallBackStorage: rebalanceCallBackStorage)
+        let client = RDKafkaClient(type: type, kafkaHandle: handle, logger: logger, rebalanceCallBackStorage: rebalanceCallBackStorage)
+        rebalanceCallBackStorage?.client = client
+        return client
     }
 
     /// Produce a message to the Kafka cluster.
@@ -346,7 +380,7 @@ public final class RDKafkaClient: Sendable {
     enum KafkaEvent {
         case deliveryReport(results: [KafkaDeliveryReport])
         case statistics(RDKafkaStatistics)
-        case rebalance(RebalanceAction)
+        case rebalance(Rebalance)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -445,17 +479,30 @@ public final class RDKafkaClient: Sendable {
         
         let code = rd_kafka_event_error(event)
         
-        let protoStringDef = String(cString: rd_kafka_rebalance_protocol(kafkaHandle))
-        let rebalanceProtocol = KafkaRebalanceProtocol.convert(from: protoStringDef)
+//        let protoStringDef = String(cString: rd_kafka_rebalance_protocol(kafkaHandle))
+//        let rebalanceProtocol = KafkaRebalanceProtocol.convert(from: protoStringDef)
         let list = KafkaTopicList(from: .init(from: partitions))
+        let action: Rebalance.RebalanceAction
         switch code {
         case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
-            return .rebalance(.assign(rebalanceProtocol, list))
+            action = .assign(list)
         case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
-            return .rebalance(.revoke(rebalanceProtocol, list))
+            action = .revoke(list)
         default:
-            return .rebalance(.error(rebalanceProtocol, list, KafkaError.rdKafkaError(wrapping: code)))
+            action = .error(list, KafkaError.rdKafkaError(wrapping: code))
         }
+
+        return .rebalance(
+            Rebalance(
+                client: self,
+                rebalanceProtocol: .convert(
+                    from: String(
+                        cString: rd_kafka_rebalance_protocol(self.kafkaHandle)
+                    )
+                ),
+                rebalanceAction: action
+            )
+        )
     }
     /// Handle event of type `RDKafkaEvent.statistics`.
     ///
@@ -759,11 +806,14 @@ public final class RDKafkaClient: Sendable {
     ///
     /// Make sure to run poll loop until ``RDKafkaClient/consumerIsClosed`` returns `true`.
     func consumerClose() throws {
+        logger.info("Closing consumer")
         let result = rd_kafka_consumer_close_queue(self.kafkaHandle, self.queue)
         let kafkaError = rd_kafka_error_code(result)
         if kafkaError != RD_KAFKA_RESP_ERR_NO_ERROR {
+            logger.info("Consumer close failed")
             throw KafkaError.rdKafkaError(wrapping: kafkaError)
         }
+        logger.info("Consumer closed")
     }
 
     /// Returns `true` if the underlying `librdkafka` consumer is closed.
