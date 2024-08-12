@@ -172,6 +172,25 @@ final public class Rebalance: Sendable, CustomStringConvertible {
         client.logger.info("Rebalance applied \(funcName)")
     }
 
+    public func apply() async throws {
+        switch self.rebalanceAction {
+        case .assign(let list):
+            switch rebalanceProtocol {
+            case .cooperative: try await assignIncremental(to: list)
+            case .eager: try await assign(to: list)
+            default: try await assign(to: nil)
+            }
+        case .revoke(let list):
+            switch rebalanceProtocol {
+            case .cooperative: try await unassignIncremental(to: list)
+            case .eager: try await assign(to: nil)
+            default: try await assign(to: nil)
+            }
+        default:
+            try await assign(to: nil)
+        }
+    }
+
     public var description: String {
         "Rebalance: \(rebalanceProtocol): \(rebalanceAction)"
     }

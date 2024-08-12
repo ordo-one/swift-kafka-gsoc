@@ -44,6 +44,23 @@ final class KafkaTests: XCTestCase {
     var uniqueTestTopic: String!
     var uniqueTestTopic2: String!
 
+    lazy var basicConfig: KafkaConsumerConfiguration = {
+        var basicConfig = KafkaConsumerConfiguration(
+            consumptionStrategy: .group(id: "no-group", topics: []),
+            bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
+        )
+        basicConfig.broker.addressFamily = .v4
+        return basicConfig
+    } ()
+    lazy var client: RDKafkaClient = { 
+        try! RDKafkaClient.makeClient(
+            type: .consumer,
+            configDictionary: basicConfig.dictionary,
+            events: [],
+            logger: .kafkaTest
+        )
+    }()
+
     override func setUpWithError() throws {
         self.bootstrapBrokerAddress = KafkaConfiguration.BrokerAddress(
             host: self.kafkaHost,
@@ -58,19 +75,7 @@ final class KafkaTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        var basicConfig = KafkaConsumerConfiguration(
-            consumptionStrategy: .group(id: "no-group", topics: []),
-            bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
-        )
-        basicConfig.broker.addressFamily = .v4
-
         // TODO: ok to block here? Problem: Tests may finish before topic is deleted
-        let client = try RDKafkaClient.makeClient(
-            type: .consumer,
-            configDictionary: basicConfig.dictionary,
-            events: [],
-            logger: .kafkaTest
-        )
         if let uniqueTestTopic {
             try client._deleteTopic(uniqueTestTopic, timeout: 10 * 1000)
         }
@@ -567,6 +572,97 @@ final class KafkaTests: XCTestCase {
         }
     }
 
+    func testConsumerWithRebalance() async throws {
+        let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
+        let firstConsumerOffset = testMessages.count / 2
+        let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: self.producerConfig, logger: .kafkaTest)
+
+        // Important: both consumer must have the same group.id
+        let uniqueGroupID = UUID().uuidString
+
+        // MARK: First Consumer
+
+        var consumer1Config = KafkaConsumerConfiguration(
+            consumptionStrategy: .group(
+                id: uniqueGroupID,
+                topics: [self.uniqueTestTopic]
+            ),
+            bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
+        )
+        consumer1Config.autoOffsetReset = .beginning // Read topic from beginning
+        consumer1Config.broker.addressFamily = .v4
+
+        let (consumer1, events) = try KafkaConsumer.makeConsumerWithEvents(
+            configuration: consumer1Config,
+            logger: .kafkaTest
+        )
+
+        let serviceGroupConfiguration1 = ServiceGroupConfiguration(services: [producer, consumer1], logger: .kafkaTest)
+        let serviceGroup1 = ServiceGroup(configuration: serviceGroupConfiguration1)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Run Task
+            group.addTask {
+                try await serviceGroup1.run()
+            }
+
+            // Producer Task
+            group.addTask {
+                try await Self.sendAndAcknowledgeMessages(
+                    producer: producer,
+                    events: acks,
+                    messages: testMessages
+                )
+            }
+            
+            // rebalance
+            group.addTask {
+                for await event in events {
+                    if case .rebalance(let rebalance) = event {
+                        try await rebalance.apply()
+                    }
+                }
+            }
+
+            // First Consumer Task
+            group.addTask {
+                var consumedMessages = [KafkaConsumerMessage]()
+                for try await message in consumer1.messages {
+                    consumedMessages.append(message)
+
+                    // Only read first half of messages
+                    if consumedMessages.count >= firstConsumerOffset {
+                        break
+                    }
+                }
+
+                XCTAssertEqual(firstConsumerOffset, consumedMessages.count)
+
+                for (index, consumedMessage) in consumedMessages.enumerated() {
+                    XCTAssertEqual(testMessages[index].topic, consumedMessage.topic)
+                    XCTAssertEqual(ByteBuffer(string: testMessages[index].key!), consumedMessage.key)
+                    XCTAssertEqual(ByteBuffer(string: testMessages[index].value), consumedMessage.value)
+                }
+            }
+
+            // Wait for Producer Task and Consumer Task to complete
+            try await group.next()
+            try await group.next()
+
+            if let uniqueTestTopic = self.uniqueTestTopic {
+                try self.client._deleteTopic(uniqueTestTopic, timeout: 10 * 1000)
+                self.uniqueTestTopic = nil
+            }
+            // Wait for a couple of more run loop iterations.
+            // We do this to process the remaining 5 messages.
+            // These messages shall be discarded and their offsets should not be committed.
+            // try await Task.sleep(for: .seconds(2))
+            // Shutdown the serviceGroup
+            await serviceGroup1.triggerGracefulShutdown()
+        }
+
+    }
+
     func testCommittedOffsetsAreCorrect() async throws {
         let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
         let firstConsumerOffset = testMessages.count / 2
@@ -695,6 +791,7 @@ final class KafkaTests: XCTestCase {
 
             // Wait for second Consumer Task to complete
             try await group.next()
+
             // Shutdown the serviceGroup
             await serviceGroup2.triggerGracefulShutdown()
         }
@@ -990,18 +1087,18 @@ final class KafkaTests: XCTestCase {
     func createUniqueTopic(partitions: Int32 = -1 /* default num for cluster */) throws -> String {
         // TODO: ok to block here? How to make setup async?
 
-        var basicConfig = KafkaConsumerConfiguration(
-            consumptionStrategy: .group(id: "no-group", topics: []),
-            bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
-        )
-        basicConfig.broker.addressFamily = .v4
+       // var basicConfig = KafkaConsumerConfiguration(
+       //     consumptionStrategy: .group(id: "no-group", topics: []),
+       //     bootstrapBrokerAddresses: [self.bootstrapBrokerAddress]
+       // )
+       // basicConfig.broker.addressFamily = .v4
 
-        let client = try RDKafkaClient.makeClient(
-            type: .consumer,
-            configDictionary: basicConfig.dictionary,
-            events: [],
-            logger: .kafkaTest
-        )
+       // let client = try RDKafkaClient.makeClient(
+       //     type: .consumer,
+       //     configDictionary: basicConfig.dictionary,
+       //     events: [],
+       //     logger: .kafkaTest
+       // )
         return try client._createUniqueTopic(partitions: partitions, timeout: 10 * 1000)
     }
     
