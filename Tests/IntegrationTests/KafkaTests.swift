@@ -573,9 +573,44 @@ final class KafkaTests: XCTestCase {
     }
 
     func testConsumerWithRebalance() async throws {
+        while true {
+            try await _testConsumerWithRebalance()
+        }
+    }
+
+    func _testConsumerWithRebalance() async throws {
+        if uniqueTestTopic == nil {
+            let uniqueTestTopic = "testConsumerWithRebalance-test-topic"
+            try? client._createTopic(topicName: uniqueTestTopic, partitions: -1, timeout: 10 * 1000)
+            self.uniqueTestTopic = uniqueTestTopic
+        }
         let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
         let firstConsumerOffset = testMessages.count / 2
         let (producer, acks) = try KafkaProducer.makeProducerWithEvents(configuration: self.producerConfig, logger: .kafkaTest)
+
+        let produceGroupConfiguration1 = ServiceGroupConfiguration(services: [producer], logger: .kafkaTest)
+        let produceGroup1 = ServiceGroup(configuration: produceGroupConfiguration1)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Run Task
+            group.addTask {
+                try await produceGroup1.run()
+            }
+
+
+            // Producer Task
+            group.addTask {
+                try await Self.sendAndAcknowledgeMessages(
+                    producer: producer,
+                    events: acks,
+                    messages: testMessages
+                )
+            }
+            
+            try await group.next()
+
+            await produceGroup1.triggerGracefulShutdown()
+        }
 
         // Important: both consumer must have the same group.id
         let uniqueGroupID = UUID().uuidString
@@ -591,28 +626,21 @@ final class KafkaTests: XCTestCase {
         )
         consumer1Config.autoOffsetReset = .beginning // Read topic from beginning
         consumer1Config.broker.addressFamily = .v4
+        consumer1Config.debugOptions = [.all]
+        consumer1Config.listenForRebalance = true
 
         let (consumer1, events) = try KafkaConsumer.makeConsumerWithEvents(
             configuration: consumer1Config,
             logger: .kafkaTest
         )
 
-        let serviceGroupConfiguration1 = ServiceGroupConfiguration(services: [producer, consumer1], logger: .kafkaTest)
+        let serviceGroupConfiguration1 = ServiceGroupConfiguration(services: [consumer1], logger: .kafkaTest)
         let serviceGroup1 = ServiceGroup(configuration: serviceGroupConfiguration1)
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             // Run Task
             group.addTask {
                 try await serviceGroup1.run()
-            }
-
-            // Producer Task
-            group.addTask {
-                try await Self.sendAndAcknowledgeMessages(
-                    producer: producer,
-                    events: acks,
-                    messages: testMessages
-                )
             }
             
             // rebalance
@@ -646,7 +674,6 @@ final class KafkaTests: XCTestCase {
             }
 
             // Wait for Producer Task and Consumer Task to complete
-            try await group.next()
             try await group.next()
 
             if let uniqueTestTopic = self.uniqueTestTopic {

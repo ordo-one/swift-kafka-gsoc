@@ -24,6 +24,12 @@ let rdkafkaExclude = [
     "./librdkafka/src/rdkafka_sasl_win32.c",
     "./librdkafka/src/rdwin32.h",
     "./librdkafka/src/win32_config.h",
+    "./librdkafka/src/rdkafka_telemetry_decode.h",
+    "./librdkafka/src/opentelemetry/metrics.options",
+//    "./librdkafka/src/rdkafka_mock_handlers.c",
+//    "./librdkafka/src/rdkafka_telemetry_encode.c",
+    "./librdkafka/src/rdkafka_telemetry_encode.h",
+    "./librdkafka/src/README.lz4.md",
 ]
 
 let package = Package(

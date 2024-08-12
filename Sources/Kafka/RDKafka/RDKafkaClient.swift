@@ -66,7 +66,8 @@ public final class RDKafkaClient: Sendable {
         logger.info("dtor RDKafkaClient")
         // Loose reference to librdkafka's event queue
         rd_kafka_queue_destroy(self.queue)
-        rd_kafka_destroy(kafkaHandle)
+        // rd_kafka_destroy(kafkaHandle)
+        rd_kafka_destroy_flags(kafkaHandle, RD_KAFKA_DESTROY_F_NO_CONSUMER_CLOSE)
         logger.info("dtor finished")
     }
 
