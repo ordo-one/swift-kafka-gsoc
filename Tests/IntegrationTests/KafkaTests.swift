@@ -580,9 +580,7 @@ final class KafkaTests: XCTestCase {
 
     func _testConsumerWithRebalance() async throws {
         if uniqueTestTopic == nil {
-            let uniqueTestTopic = "testConsumerWithRebalance-test-topic"
-            try? client._createTopic(topicName: uniqueTestTopic, partitions: -1, timeout: 10 * 1000)
-            self.uniqueTestTopic = uniqueTestTopic
+            self.uniqueTestTopic = try createUniqueTopic()
         }
         let testMessages = Self.createTestMessages(topic: self.uniqueTestTopic, count: 10)
         let firstConsumerOffset = testMessages.count / 2
@@ -629,9 +627,11 @@ final class KafkaTests: XCTestCase {
         consumer1Config.debugOptions = [.all]
         consumer1Config.listenForRebalance = true
 
+        var logger = Logger(label: "consumer")
+        logger.logLevel = .debug
         let (consumer1, events) = try KafkaConsumer.makeConsumerWithEvents(
             configuration: consumer1Config,
-            logger: .kafkaTest
+            logger: logger
         )
 
         let serviceGroupConfiguration1 = ServiceGroupConfiguration(services: [consumer1], logger: .kafkaTest)
@@ -676,6 +676,7 @@ final class KafkaTests: XCTestCase {
             // Wait for Producer Task and Consumer Task to complete
             try await group.next()
 
+            // NOTE: important: remove topic before consumer to trigger revoke
             if let uniqueTestTopic = self.uniqueTestTopic {
                 try self.client._deleteTopic(uniqueTestTopic, timeout: 10 * 1000)
                 self.uniqueTestTopic = nil
