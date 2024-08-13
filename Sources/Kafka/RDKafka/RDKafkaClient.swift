@@ -117,39 +117,42 @@ public final class RDKafkaClient: Sendable {
                     default:
                         action = .error(list, KafkaError.rdKafkaError(wrapping: code))
                     }
-                    if let rebalanceOpaqueCb {
-                        let rebalanceCb = Unmanaged<RebalanceCallbackStorage>.fromOpaque(rebalanceOpaqueCb).takeUnretainedValue()
-                        guard let client = rebalanceCb.client else {
-                            rd_kafka_assign(handle, nil) // fallback
-                            return
-                        }
-                        let rebalance = Rebalance(
-                                    client: client,
-                                    rebalanceProtocol: .convert(
-                                        from: String(
-                                            cString: rd_kafka_rebalance_protocol(handle)
-                                        )
-                                    ), 
-                                    rebalanceAction: action
-                                )
-                        rebalanceCb.rebalanceCallback(
-                            .rebalance(
-                                rebalance
-                            )
-                        )
-
-                        client.logger.info("Rebalance called")
-//                        while true {
-//                            let rebalanceApplied = rebalance.rebalanceApplied.withLockedValue { $0 }
-//                            client.logger.info("Wait for rebalance to happen, current value: \(rebalanceApplied)")
-                            /*if rebalanceApplied {
-                                break
-                            }
-                            Thread.sleep(forTimeInterval: 1)*/
-//                        }
-                    } else {
+                    guard let rebalanceOpaqueCb else {
                         fatalError("Cannot find rebalance cb")
                     }
+                    let rebalanceCb = Unmanaged<RebalanceCallbackStorage>.fromOpaque(rebalanceOpaqueCb).takeUnretainedValue()
+                    guard let client = rebalanceCb.client else {
+                        print("Runnign assign nil as a fallback")
+                        rd_kafka_assign(handle, nil) // fallback
+                        fatalError()
+                        return
+                    }
+                    let semaphore: DispatchSemaphore = .init(value: 0)
+                    rebalanceCb.rebalanceCallback(
+                        .rebalance(
+                            Rebalance(
+                                client: client,
+                                rebalanceProtocol: .convert(
+                                    from: String(
+                                        cString: rd_kafka_rebalance_protocol(handle)
+                                    )
+                                ), 
+                                rebalanceAction: action,
+                                semaphore: semaphore
+                            )
+                        )
+                    )
+
+                    client.logger.debug("Rebalance called")
+                    let timeout = DispatchTime.now() + DispatchTimeInterval.seconds(300) // 5 mins
+                    while true {
+                        let result = semaphore.wait(timeout: timeout)
+                        if result == .success {
+                            return
+                        }
+                        client.logger.info("Still waiting rebalance after \(timeout)")
+                    }
+                    client.logger.debug("Rebalance applied")
                 }
             }
         }
@@ -501,7 +504,8 @@ public final class RDKafkaClient: Sendable {
                         cString: rd_kafka_rebalance_protocol(self.kafkaHandle)
                     )
                 ),
-                rebalanceAction: action
+                rebalanceAction: action,
+                semaphore: .init(value: 0)
             )
         )
     }

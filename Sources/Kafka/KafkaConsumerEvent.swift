@@ -13,7 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 import Crdkafka
-import NIOConcurrencyHelpers
+import Atomics
+import Dispatch
 
 public struct KafkaTopicList {
     let list: RDKafkaTopicPartitionList
@@ -101,8 +102,8 @@ public enum RebalanceAction : Sendable, Hashable {
 
 final public class Rebalance: Sendable, CustomStringConvertible {
     private let client: RDKafkaClient
-    let  rebalanceApplied: NIOLockedValueBox<Bool> = .init(false)
-
+    private let rebalanceApplied = ManagedAtomic(false)
+    private let semaphore: DispatchSemaphore
 
     public enum RebalanceProtocol: Sendable {
         case cooperative
@@ -124,20 +125,43 @@ final public class Rebalance: Sendable, CustomStringConvertible {
         case error(KafkaTopicList, KafkaError)
     }
 
-    init(client: RDKafkaClient, rebalanceProtocol: RebalanceProtocol, rebalanceAction: RebalanceAction) {
+    init(client: RDKafkaClient, rebalanceProtocol: RebalanceProtocol, rebalanceAction: RebalanceAction, semaphore: DispatchSemaphore) {
         self.client = client
         self.rebalanceProtocol = rebalanceProtocol
         self.rebalanceAction = rebalanceAction
+        self.semaphore = semaphore
 
         client.logger.info("init rebalance")
     }
 
     deinit {
-        if !rebalanceApplied.withLockedValue { $0 } {
-            client.logger.info("Attention: rebalance auto triggered!")
-            client.withKafkaHandlePointer {
-                rd_kafka_assign($0, nil)
+        if rebalanceApplied.load(ordering: .relaxed) == false {
+            client.logger.warning("Attention: rebalance \(self.description) was not applied, Call rd_kafka_assign(nil) to avoid hangs!")
+            client.withKafkaHandlePointer { handle in
+                switch rebalanceAction {
+                case .assign(let list):
+                    switch rebalanceProtocol {
+                    case .eager:
+                        _ = list.list.withListPointer { rd_kafka_assign(handle, $0) }
+                    case .cooperative: 
+                        _ = list.list.withListPointer { rd_kafka_incremental_assign(handle, $0) }
+                    default:
+                        _ = rd_kafka_assign(handle, nil)
+                    }
+                case .revoke(let list):
+                    switch rebalanceProtocol {
+                    case .eager:
+                         _ = rd_kafka_assign(handle, nil)
+                    case .cooperative: 
+                        _ = list.list.withListPointer { rd_kafka_incremental_unassign(handle, $0) }
+                    default:
+                        _ = rd_kafka_assign(handle, nil)
+                    }
+                default:
+                    _ = rd_kafka_assign(handle, nil)
+                }
             }
+            semaphore.signal()
         }
         client.logger.info("deinit rebalance")
     }
@@ -145,6 +169,7 @@ final public class Rebalance: Sendable, CustomStringConvertible {
     public let rebalanceProtocol: RebalanceProtocol
     public let rebalanceAction: RebalanceAction
 
+    // TODO: make those funcions consuming
     public func assign(to partitions: KafkaTopicList?) async throws {
         try await client.assign(topicPartitionList: partitions?.list)
         applied()
@@ -164,12 +189,16 @@ final public class Rebalance: Sendable, CustomStringConvertible {
         try await client.seek(topicPartitionList: partitions.list, timeout: timeout)
     }
 
-    public func applied(_ funcName: Int = #line) {
-        rebalanceApplied.withLockedValue {
-            $0 = true
+    public func applied() {
+        let wasApplied = rebalanceApplied.exchange(true, ordering: .relaxed)
+
+        client.logger.debug("Rebalance applied, was applied \(wasApplied)")
+
+        guard !wasApplied else {
+            return
         }
-//        rebalanceApplied = true
-        client.logger.info("Rebalance applied \(funcName)")
+
+        semaphore.signal()
     }
 
     public func apply() async throws {
