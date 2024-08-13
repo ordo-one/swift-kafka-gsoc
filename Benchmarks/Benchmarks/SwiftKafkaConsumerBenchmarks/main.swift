@@ -89,26 +89,33 @@ import NIOConcurrencyHelpers
 
 
         rd_kafka_conf_set_opaque(configPointer, ptr.toOpaque())
-        rd_kafka_conf_set_rebalance_cb(configPointer) { handle, code, topicPartition, opaque in
-            print("Rebalance received, code: \(code), \(toString(topicPartition))")
-            let rebalanceCont = Unmanaged<ContinuationStore>.fromOpaque(opaque!).takeUnretainedValue()
+        rd_kafka_conf_set_events(configPointer, RD_KAFKA_EVENT_OFFSET_COMMIT | RD_KAFKA_EVENT_REBALANCE)
 
-            switch code {
-            case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
-                 rebalanceCont.continuation.yield(.assign(rd_kafka_topic_partition_list_copy(topicPartition)!))
-            //    rd_kafka_incremental_assign(handle, topicPartition) 
-            case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
-                 rebalanceCont.continuation.yield(.revoke(rd_kafka_topic_partition_list_copy(topicPartition)!))
-            //    rd_kafka_incremental_unassign(handle, topicPartition) 
-            default:
-                fatalError("unexpected")
-            }
-        }
+
+//        rd_kafka_conf_set_rebalance_cb(configPointer) { handle, code, topicPartition, opaque in
+//            print("Rebalance received, code: \(code), \(toString(topicPartition))")
+//            let rebalanceCont = Unmanaged<ContinuationStore>.fromOpaque(opaque!).takeUnretainedValue()
+//
+//            switch code {
+//            case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+//                 rebalanceCont.continuation.yield(.assign(rd_kafka_topic_partition_list_copy(topicPartition)!))
+//            //    rd_kafka_incremental_assign(handle, topicPartition) 
+//            case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+//                 rebalanceCont.continuation.yield(.revoke(rd_kafka_topic_partition_list_copy(topicPartition)!))
+//            //    rd_kafka_incremental_unassign(handle, topicPartition) 
+//            default:
+//                fatalError("unexpected")
+//            }
+//        }
 
         let kafkaHandle = rd_kafka_new(RD_KAFKA_CONSUMER, configPointer, nil, 0)
         guard let kafkaHandle else {
             preconditionFailure("Kafka handle was not created")
         }
+
+        let queue = rd_kafka_queue_get_main(kafkaHandle)
+
+
  //       defer {
 //            print("Call kafka handle destroy")
 //            rd_kafka_poll(kafkaHandle, 0)
@@ -146,66 +153,127 @@ import NIOConcurrencyHelpers
         rd_kafka_subscribe(kafkaHandle, subscriptionList)
         rd_kafka_poll(kafkaHandle, 0)
 
-        var ctr: UInt64 = 0
-        var tmpCtr: UInt64 = 0
-
-        let interval: UInt64 = Swift.max(UInt64(messageCount / 20), 1)
-        let totalStartDate = Date.timeIntervalSinceReferenceDate
-        var totalBytes: UInt64 = 0
 
      //   benchmark.withMeasurement {
-            while ctr < messageCount {
-                guard let record = rd_kafka_consumer_poll(kafkaHandle, 10) else {
-                    continue
-                }
-                defer {
-                    rd_kafka_message_destroy(record)
-                }
-                guard record.pointee.err != RD_KAFKA_RESP_ERR__PARTITION_EOF else {
-                    continue
-                }
-                let result = rd_kafka_commit_message(kafkaHandle, record, 0)
-                precondition(result == RD_KAFKA_RESP_ERR_NO_ERROR)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var ctr: UInt64 = 0
+                var tmpCtr: UInt64 = 0
 
-                ctr += 1
-                totalBytes += UInt64(record.pointee.len)
+                let interval: UInt64 = Swift.max(UInt64(messageCount / 20), 1)
+                let totalStartDate = Date.timeIntervalSinceReferenceDate
+                var totalBytes: UInt64 = 0
 
-                tmpCtr += 1
-                if tmpCtr >= interval {
-                    benchLog("read \(ctr * 100 / UInt64(messageCount))%")
-                    tmpCtr = 0
+                while ctr < messageCount {
+                    guard let record = rd_kafka_consumer_poll(kafkaHandle, 10) else {
+                        continue
+                    }
+                    defer {
+                        rd_kafka_message_destroy(record)
+                    }
+                    guard record.pointee.err != RD_KAFKA_RESP_ERR__PARTITION_EOF else {
+                        continue
+                    }
+                    let result = rd_kafka_commit_message(kafkaHandle, record, 0)
+                    precondition(result == RD_KAFKA_RESP_ERR_NO_ERROR)
+
+                    ctr += 1
+                    totalBytes += UInt64(record.pointee.len)
+
+                    tmpCtr += 1
+                    if tmpCtr >= interval {
+                        benchLog("read \(ctr * 100 / UInt64(messageCount))%")
+                        tmpCtr = 0
+                    }
+                }
+
+
+                let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
+                let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
+                benchLog("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
+            }
+
+            group.addTask {
+                while !Task.isCancelled {
+                    if rd_kafka_consumer_closed(kafkaHandle) == 1 {
+                        print("rd_kafka_consumer_closed: 1")
+                        return
+                    }
+                    guard let event = rd_kafka_queue_poll(kafkaHandle, 100) else {
+                        continue
+                    }
+                    defer {
+                        rd_kafka_event_destroy(event)
+                    }
+                    let rdEventType = rd_kafka_event_type(event)
+
+                    switch rdEventType {
+                    case RD_KAFKA_EVENT_REBALANCE:
+                        guard let topicPartition = rd_kafka_event_topic_partition_list(event) else {
+                            fatalError("Must never happen") // TODO: remove
+                        }
+
+//                        let rebalanceCont = Unmanaged<ContinuationStore>.fromOpaque(opaque!).takeUnretainedValue()
+                        let rebalanceCont = store
+                        let code = rd_kafka_event_error(event)
+
+                        print("Rebalance received, code: \(code), \(toString(topicPartition))")
+
+                        switch code {
+                        case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+                             rebalanceCont.continuation.yield(.assign(rd_kafka_topic_partition_list_copy(topicPartition)!))
+                        //    rd_kafka_incremental_assign(handle, topicPartition)
+                        case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+                             rebalanceCont.continuation.yield(.revoke(rd_kafka_topic_partition_list_copy(topicPartition)!))
+                        //    rd_kafka_incremental_unassign(handle, topicPartition)
+                        default:
+                            fatalError("unexpected")
+                        }
+                    case RD_KAFKA_EVENT_OFFSET_COMMIT:
+                        print("offset commit received")
+                    default:
+                        print("Received unexpected event: \(rdEventType)")
+                    }
+
                 }
             }
+
+            try await group.next() // all messages received
+
+            rd_kafka_consumer_close(kafkaHandle)
+            try deleteTopic(uniqueTestTopic)
+
+//            continuation.finish()
+//            await rebalanceTask.value
+
+            try await group.next()
+        }
        // }
 
-        let closingConsumer = Task {
-            benchLog("Closing consumer")
-            rd_kafka_consumer_close(kafkaHandle)
-            benchLog("Consumer closed")
-        }
+//        let closingConsumer = Task {
+//            benchLog("Closing consumer")
+//            rd_kafka_consumer_close(kafkaHandle)
+//            benchLog("Consumer closed")
+//        }
 
 
         //await closingConsumer.value
-        Task {
-            benchLog("Deleting topic \(uniqueTestTopic)")
-            if let uniqueTestTopic {
-                try deleteTopic(uniqueTestTopic)
-            }
-            benchLog("Topic \(uniqueTestTopic) deleted")
-        }
+//        Task {
+//            benchLog("Deleting topic \(uniqueTestTopic)")
+//            if let uniqueTestTopic {
+//                try deleteTopic(uniqueTestTopic)
+//            }
+//            benchLog("Topic \(uniqueTestTopic) deleted")
+//        }
 
-        benchLog("Finishing rebalance task")
-        continuation.finish()
-        await rebalanceTask.value
+//        benchLog("Finishing rebalance task")
+//        continuation.finish()
+//        await rebalanceTask.value
 
 
         benchLog("Destroying kafka handle")
         rd_kafka_destroy(kafkaHandle)
         benchLog("Destroyed")
-
-        let timeIntervalTotal = Date.timeIntervalSinceReferenceDate - totalStartDate
-        let avgRateMb = Double(totalBytes) / timeIntervalTotal / 1024
-        benchLog("All read up to ctr: \(ctr), avgRate: (\(Int(avgRateMb))KB/s), timePassed: \(Int(timeIntervalTotal))sec")
     }
 
 func toString(_ topicPartition: UnsafeMutablePointer<rd_kafka_topic_partition_list_t>?) -> String {

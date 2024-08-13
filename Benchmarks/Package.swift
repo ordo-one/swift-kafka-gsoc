@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 5.10
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the swift-kafka-client open source project
@@ -18,10 +18,10 @@ import PackageDescription
 let package = Package(
     name: "benchmarks",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v14),
     ],
     dependencies: [
-        .package(path: "../"),
+        .package(name: "swift-kafka-client", path: "../"),
         .package(url: "https://github.com/ordo-one/package-benchmark.git", from: "1.22.3"),
     ],
     targets: [
