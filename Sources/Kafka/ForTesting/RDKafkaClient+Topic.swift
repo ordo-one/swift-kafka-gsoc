@@ -21,7 +21,7 @@ extension RDKafkaClient {
     /// Create a topic with a unique name (`UUID`).
     /// Blocks for a maximum of `timeout` milliseconds.
     /// - Parameter partitions: Partitions in topic (default: -1 - default for broker)
-    /// - Parameter config: Topic configuration, if empty broker defaults are used.
+    /// - Parameter config: Topic configuration, if empty broker defaults are used. See https://kafka.apache.org/documentation.html#topicconfigs
     /// - Parameter timeout: Timeout in milliseconds.
     /// - Returns: Name of newly created topic.
     /// - Throws: A ``KafkaError`` if the topic creation failed.
@@ -36,7 +36,7 @@ extension RDKafkaClient {
     /// Create a topic with specified name
     /// Blocks for a maximum of `timeout` milliseconds.
     /// - Parameter partitions: Partitions in topic (default: -1 - default for broker)
-    /// - Parameter config: Topic configuration, if empty broker defaults are used.
+    /// - Parameter config: Topic configuration, if empty broker defaults are used. See https://kafka.apache.org/documentation.html#topicconfigs
     /// - Parameter timeout: Timeout in milliseconds.
     /// - Returns: Name of newly created topic.
     /// - Throws: A ``KafkaError`` if the topic creation failed.
