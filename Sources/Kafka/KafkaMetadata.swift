@@ -5,6 +5,7 @@ public struct KafkaMetadata: Sendable {
 
     init(metadata: UnsafePointer<rd_kafka_metadata>) {
         self.topics = (0..<Int(metadata.pointee.topic_cnt)).map { KafkaTopicMetadata(topic: metadata.pointee.topics[$0]) }
+        rd_kafka_metadata_destroy(metadata)
     }
 }
 
