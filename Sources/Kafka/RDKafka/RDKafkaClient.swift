@@ -798,6 +798,9 @@ public final class RDKafkaClient: Sendable {
                     continuation.resume(throwing: KafkaError.rdKafkaError(wrapping: error))
                     return
                 }
+                defer {
+                    rd_kafka_metadata_destroy(metadata)
+                }
                 continuation.resume(returning: KafkaMetadata(metadata: metadata))
             }
         }
