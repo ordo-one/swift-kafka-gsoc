@@ -3,8 +3,10 @@ import Crdkafka
 public struct KafkaMetadata: Sendable {
     public let topics: [KafkaTopicMetadata]
 
-    init(metadata: UnsafePointer<rd_kafka_metadata>) {
-        self.topics = (0..<Int(metadata.pointee.topic_cnt)).map { KafkaTopicMetadata(topic: metadata.pointee.topics[$0]) }
+    init(metadata: UnsafePointer<rd_kafka_metadata> /* unowned */) {
+        self.topics = (0..<Int(metadata.pointee.topic_cnt)).map {
+            KafkaTopicMetadata(topic: metadata.pointee.topics[$0])
+        }
     }
 }
 
