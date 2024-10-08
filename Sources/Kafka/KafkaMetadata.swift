@@ -3,19 +3,10 @@ import Crdkafka
 public struct KafkaMetadata: Sendable {
     public let topics: [KafkaTopicMetadata]
 
-    init(metadata: borrowing UnsafePointer<rd_kafka_metadata>) {
-        /*
-         cannot use the following with the following error:
-         'metadata' cannot be captured by an escaping closure since it is a borrowed parameter
-         self.topics = (0..<Int(metadata.pointee.topic_cnt)).map { KafkaTopicMetadata(topic: metadata.pointee.topics[$0]) }
-         */
-
-        var topics: [KafkaTopicMetadata] = .init()
-        topics.reserveCapacity(Int(metadata.pointee.topic_cnt))
-        for i in 0..<Int(metadata.pointee.topic_cnt) {
-            topics.append(KafkaTopicMetadata(topic: metadata.pointee.topics[i]))
+    init(metadata: UnsafePointer<rd_kafka_metadata> /* unowned */) {
+        self.topics = (0..<Int(metadata.pointee.topic_cnt)).map {
+            KafkaTopicMetadata(topic: metadata.pointee.topics[$0])
         }
-        self.topics = topics
     }
 }
 
