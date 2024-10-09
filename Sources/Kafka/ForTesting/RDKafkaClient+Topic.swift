@@ -102,7 +102,7 @@ extension RDKafkaClient {
 
             let topicResultError = rd_kafka_topic_result_error(topicResult)
             guard topicResultError == RD_KAFKA_RESP_ERR_NO_ERROR else {
-                throw KafkaError.rdKafkaError(wrapping: topicResultError)
+                throw KafkaError.rdKafkaError(wrapping: topicResultError, errorMessage: "Failed to create topic '\(topicName)'")
             }
 
             let receivedTopicName = String(cString: rd_kafka_topic_result_name(topicResult))
