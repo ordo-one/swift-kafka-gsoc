@@ -102,13 +102,12 @@ public final class RDKafkaTopicPartitionList {
 
 extension RDKafkaTopicPartitionList: Sendable {}
 extension RDKafkaTopicPartitionList: Hashable {
-    
     public func hash(into hasher: inout Hasher) {
         for idx in 0..<self.count {
             hasher.combine(self.getByIdx(idx: idx))
         }
     }
-    
+
     public static func == (lhs: RDKafkaTopicPartitionList, rhs: RDKafkaTopicPartitionList) -> Bool {
         if lhs.count != rhs.count {
             return false
@@ -126,9 +125,15 @@ extension RDKafkaTopicPartitionList: Hashable {
 extension RDKafkaTopicPartitionList: CustomStringConvertible {
     public var description: String {
         var str = "RDKafkaTopicPartitionList {"
+        var topics: [String: [(KafkaPartition, KafkaOffset)]] = [:]
         for idx in 0..<count {
-            str += "\(getByIdx(idx: idx)!)"
+            let topicPartition = getByIdx(idx: idx)!
+            topics[topicPartition.topic, default: []].append((topicPartition.partition, topicPartition.offset))
         }
+        str += topics.map {
+            let partitions = $0.value.map { "(\($0.0): \($0.1))" }.joined(separator: ", ")
+            return "\"\($0.key)\": [\(partitions)]"
+        }.joined(separator: ", ")
         str += "}"
         return str
     }
