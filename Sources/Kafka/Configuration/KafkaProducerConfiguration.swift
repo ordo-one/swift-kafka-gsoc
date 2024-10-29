@@ -49,6 +49,9 @@ public struct KafkaProducerConfiguration {
     /// Default: `false`
     public var isIdempotenceEnabled: Bool = false
 
+
+    public var isExperimentalGaplessGuaranteeEnabled: Bool = false
+
     /// Producer queue options.
     public struct QueueConfiguration: Sendable, Hashable {
         /// Maximum number of messages allowed on the producer queue. This queue is shared by all topics and partitions.
@@ -184,6 +187,7 @@ extension KafkaProducerConfiguration {
         var resultDict: [String: String] = [:]
 
         resultDict["enable.idempotence"] = String(self.isIdempotenceEnabled)
+        resultDict["enable.gapless.guarantee"] = String(isExperimentalGaplessGuaranteeEnabled)
         resultDict["queue.buffering.max.messages"] = String(self.queue.messageLimit.rawValue)
         resultDict["queue.buffering.max.kbytes"] = String(self.queue.maximumMessageBytes / 1024)
         resultDict["queue.buffering.max.ms"] = String(self.queue.maximumMessageQueueTime.inMilliseconds)
