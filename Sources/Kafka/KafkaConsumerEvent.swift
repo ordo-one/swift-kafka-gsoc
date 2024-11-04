@@ -100,6 +100,8 @@ public enum RebalanceAction : Sendable, Hashable {
 public enum KafkaConsumerEvent: Sendable, Hashable {
     /// Rebalance from librdkafka
     case rebalance(RebalanceAction)
+    /// Error from librdkafka
+    case error(KafkaError)
     /// - Important: Always provide a `default` case when switiching over this `enum`.
     case DO_NOT_SWITCH_OVER_THIS_EXHAUSITVELY
 
@@ -109,6 +111,8 @@ public enum KafkaConsumerEvent: Sendable, Hashable {
             fatalError("Cannot cast \(event) to KafkaConsumerEvent")
         case .rebalance(let action):
             self = .rebalance(action)
+        case .error(let error):
+            self = .error(error)
         case .deliveryReport:
             fatalError("Cannot cast \(event) to KafkaConsumerEvent")
         }

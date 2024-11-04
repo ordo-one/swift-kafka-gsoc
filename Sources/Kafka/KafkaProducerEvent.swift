@@ -16,17 +16,8 @@
 public enum KafkaProducerEvent: Sendable, Hashable {
     /// A collection of delivery reports received from the Kafka cluster indicating the status of produced messages.
     case deliveryReports([KafkaDeliveryReport])
+    /// Error from librdkafka
+    case error(KafkaError)
     /// - Important: Always provide a `default` case when switching over this `enum`.
     case DO_NOT_SWITCH_OVER_THIS_EXHAUSITVELY
-
-    internal init(_ event: RDKafkaClient.KafkaEvent) {
-        switch event {
-        case .deliveryReport(results: let results):
-            self = .deliveryReports(results)
-        case .rebalance(_):
-            fatalError("Cannot cast \(event) to KafkaProducerEvent")
-        case .statistics:
-            fatalError("Cannot cast \(event) to KafkaProducerEvent")
-        }
-    }
 }
