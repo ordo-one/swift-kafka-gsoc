@@ -276,6 +276,12 @@ public final class KafkaProducer: Service, Sendable {
                         _ = source?.yield(.deliveryReports(reports))
                     case .statistics(let statistics):
                         self.configuration.metrics.update(with: statistics)
+                    case .error(let error):
+                        if let source {
+                            _ = source.yield(.error(error))
+                        } else {
+                            throw error
+                        }
                     default:
                         fatalError("Cannot cast \(event) to KafkaProducerEvent")
                     }

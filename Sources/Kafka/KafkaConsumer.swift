@@ -486,6 +486,12 @@ public final class KafkaConsumer: Sendable, Service {
                         } else {
                             try await client.assign(topicPartitionList: nil) // fallback
                         }
+                    case .error(let error):
+                        if let eventSource {
+                            _ = eventSource.yield(.error(error))
+                        } else {
+                            throw error
+                        }
                     default:
                         break // Ignore
                     }

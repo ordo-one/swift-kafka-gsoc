@@ -347,6 +347,7 @@ public final class RDKafkaClient: Sendable {
         case deliveryReport(results: [KafkaDeliveryReport])
         case statistics(RDKafkaStatistics)
         case rebalance(RebalanceAction)
+        case error(KafkaError)
     }
 
     /// Poll the event `rd_kafka_queue_t` for new events.
@@ -406,6 +407,8 @@ public final class RDKafkaClient: Sendable {
                 if let forwardEvent = self.handleStatistics(event) {
                     events.append(forwardEvent)
                 }
+            case .error:
+                events.append(self.handleError(event))
             case .none:
                 // Finished reading events, return early
                 return shouldSleep
@@ -415,6 +418,19 @@ public final class RDKafkaClient: Sendable {
         }
 
         return shouldSleep
+    }
+
+    private func handleError(_ event: OpaquePointer?) -> KafkaEvent {
+        let err = rd_kafka_event_error(event)
+        let errorString = if let error = rd_kafka_err2str(rd_kafka_event_error(event)) {
+            String(cString: error)
+        } else  {
+            "\(err)"
+        }
+        let fatal = rd_kafka_event_error_is_fatal(event) != 0
+
+        return .error(KafkaError.rdKafkaError(wrapping: err, errorMessage: errorString, isFatal: fatal))
+
     }
 
     /// Handle event of type `RDKafkaEvent.deliveryReport`.
