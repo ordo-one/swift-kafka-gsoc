@@ -24,6 +24,8 @@ let rdkafkaExclude = [
     "./librdkafka/src/rdkafka_sasl_win32.c",
     "./librdkafka/src/rdwin32.h",
     "./librdkafka/src/win32_config.h",
+    "./librdkafka/src/lz4.c",
+    "./librdkafka/src/lz4.h",
 ]
 
 let package = Package(
@@ -45,6 +47,7 @@ let package = Package(
         ),
     ],
     dependencies: [
+        .package(url: "https://github.com/ordo-one/package-lz4", from: "1.10.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.62.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl", from: "2.25.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.1.0"),
@@ -60,6 +63,7 @@ let package = Package(
             dependencies: [
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "libzstd", package: "zstd"),
+                .product(name: "lz4", package: "package-lz4"),
             ],
             exclude: rdkafkaExclude,
             sources: ["./librdkafka/src/"],
